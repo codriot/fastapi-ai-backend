@@ -1,3 +1,4 @@
+from datetime import datetime
 from pydantic import BaseModel
 from typing import Optional, List
 
@@ -14,3 +15,4 @@ class User(BaseModel):
     favorite_foods: List[str]
     goal: str
     dietitian_id: Optional[str] = None
+    created_at: datetime
