@@ -27,16 +27,11 @@ def remove_user(uid: str = Depends(verify_token)):
     """ Token doğrulandıktan sonra kullanıcıyı siler """
     return delete_user(uid)
 
-@app.post("/comments/")
-async def create_comment(comment: PostComment):
-    result = add_comment(comment)
-    return result
-
 # Uploads klasörünü dışarıdan erişilebilir hale getiriyoruz
 UPLOAD_FOLDER = "uploads"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-@app.post("/posts/")
+@app.post("/post/")
 async def create_post(
     post_id: str = Form(...),
     user_id: str = Form(...),
@@ -74,6 +69,7 @@ async def get_recipe_names(
     except Exception as e:
         return {"error": f"Bir hata oluştu: {str(e)}"}
 
+
 @app.post("/comments/")
 async def create_comment(comment: PostComment):
     """Belirtilen post'a yorum ekler"""
@@ -84,12 +80,12 @@ async def remove_comment(post_id: str, comment_id: str):
     """Bir posttaki yorumu siler"""
     return delete_comment(post_id, comment_id)
 
-@app.put("/posts/{post_id}")
+@app.put("/post/{post_id}")
 async def modify_post(post_id: str, content: str):
     """Bir post'un içeriğini günceller"""
     return update_post(post_id, content)
 
-@app.delete("/posts/{post_id}")
+@app.delete("/post/{post_id}")
 async def remove_post(post_id: str):
     """Bir post'u tamamen siler"""
     return delete_post(post_id)

@@ -1,13 +1,11 @@
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI
 from pydantic import BaseModel
-from typing import List
+from typing import List, Optional
 from datetime import datetime
 
 app = FastAPI()
 
-from pydantic import BaseModel
-from typing import List, Optional
-from datetime import datetime
+
 
 class Post(BaseModel):
     post_id: str
