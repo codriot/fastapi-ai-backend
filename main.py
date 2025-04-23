@@ -1,27 +1,49 @@
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Depends, Body, Header
 from fastapi.responses import FileResponse, JSONResponse
-from firebase import verify_token, db
-from models.post import Post, PostComment
-from models.user import User, UserCreate, Role, user_to_dict, user_details_to_dict, dietitian_details_to_dict
-from models.dietitian import DietitianCreate, dietitian_to_dict
-from services.post_service import add_comment, delete_comment, delete_post, save_post, update_post
-from services.user_service import add_user, get_user, delete_user
-from services.recipe_service import get_recipe_names_by_keyword
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from fastapi.middleware.cors import CORSMiddleware
+from database import get_db, Base, engine
+from sqlalchemy.orm import Session
+import traceback
+import logging
 import os
-from firebase_admin import auth, initialize_app, firestore, credentials
-import firebase_admin  # firebase_admin modülünü içe aktarın
 from datetime import datetime, timedelta
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-import jwt  # JWT kütüphanesi
+import jwt
+from pydantic import BaseModel
+from typing import List, Optional, Dict, Any
+from passlib.context import CryptContext
 import pandas as pd
 import joblib
 import sys
-from pydantic import BaseModel, Field
-from typing import List, Optional
 from enum import Enum
 
 # Ana proje dizinini sys.path'e ekleyelim
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+# Modelleri import edelim - Önce bağımsız modeller
+from models.food_tracking import (
+    Food, AIModelOutput, ProgressTracking, Appointment,
+    FoodCreate, AIModelOutputCreate, ProgressTrackingCreate, AppointmentCreate
+)
+from models.user import User, UserCreate, UserResponse as UserResponseModel
+from models.dietitian import Dietitian, DietitianCreate, DietitianResponse
+from models.message import Message, MessageCreate, MessageResponse
+from models.post import PostDB, PostCommentDB, Post, PostComment, PostCreate, PostResponse
+
+# Servisleri import edelim
+from services.user_service import (
+    create_user, get_user_by_id, get_user_by_email, update_user, 
+    delete_user, authenticate_user, get_password_hash
+)
+from services.dietitian_service import (
+    create_dietitian, get_dietitian_by_id, get_dietitian_by_email, 
+    update_dietitian, delete_dietitian, authenticate_dietitian
+)
+from services.post_service import (
+    create_post, get_post, get_posts, get_user_posts, update_post, 
+    delete_post, add_comment, get_comments, delete_comment
+)
+from services.recipe_service import get_recipe_names_by_keyword
 
 # Yapay zeka modülleri
 try:
@@ -35,22 +57,42 @@ try:
 except ImportError as e:
     print(f"Modül yüklenirken hata oluştu: {e}")
 
-# Firebase Admin SDK'yı yalnızca bir kez başlat
-if not firebase_admin._apps:
-    initialize_app()
+# Veritabanı tablolarını oluştur
+Base.metadata.create_all(bind=engine)
 
-# Initialize Firestore client
-db = firestore.client()
+# Loglama ayarları
+logging.basicConfig(level=logging.DEBUG, 
+                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Diet App API", description="Diyet ve beslenme uygulaması için API")
 
-# Token doğrulama için HTTPBearer kullanımı
-security = HTTPBearer()
+# CORS Middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Tüm domainlere izin ver (geliştirme için)
+    allow_credentials=True,
+    allow_methods=["*"],  # Tüm HTTP metodlarına izin ver
+    allow_headers=["*"],  # Tüm HTTP başlıklarına izin ver
+)
 
-# JWT Ayarları
-SECRET_KEY = "your_secret_key"  # Güçlü bir secret key belirleyin
-ALGORITHM = "HS256"  # Kullanılacak algoritma
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 1 hafta (dakika cinsinden)
+# Uploads klasörünü dışarıdan erişilebilir hale getiriyoruz
+UPLOAD_FOLDER = "uploads"
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+# JWT için ayarlar
+# Rastgele ve güçlü bir secret key oluşturalım
+import secrets
+# Sabit SECRET_KEY yerine rastgele ama uygulamanın her başlatılışında aynı kalacak bir key oluşturalım
+SECRET_KEY = "dietapp-JWT-secretkey-2025-04-23-v1"  # Üretim ortamında daha güçlü bir key kullanılmalı
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 1 hafta
+
+# OAuth2 için token şeması
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+
+# Şifre işlemleri için
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # Request modellerimizi tanımlayalım
 class DietRequest(BaseModel):
@@ -64,137 +106,314 @@ class RecipeRequest(BaseModel):
     n_recommendations: int = 5
     is_turkish: bool = False
 
-def create_jwt_token(data: dict):
-    """JWT token oluşturur."""
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+
+class TokenData(BaseModel):
+    user_id: Optional[int] = None
+    role: Optional[str] = None
+
+class UserAuth(BaseModel):
+    email: str
+    password: str
+
+class UserResponse(BaseModel):
+    user_id: int
+    name: str
+    email: str
+    role: str = "user"
+    
+    class Config:
+        orm_mode = True
+
+# Token yardımcı fonksiyonları
+def create_access_token(data: dict, expires_delta: timedelta = None):
     to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    
+    # user_id'yi string'e dönüştür
+    if "sub" in to_encode and to_encode["sub"] is not None:
+        to_encode["sub"] = str(to_encode["sub"])
+        
+    if expires_delta:
+        expire = datetime.utcnow() + expires_delta
+    else:
+        expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-    return encoded_jwt
-
-def verify_jwt_token(token: str):
-    """JWT token doğrular."""
+    
+    # PyJWT 2.0+ ile uyumluluk için değişiklik
     try:
-        decoded_token = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        return decoded_token
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="Token süresi dolmuş.")
-    except jwt.InvalidTokenError:
-        raise HTTPException(status_code=401, detail="Geçersiz token.")
-
-def verify_token_header(authorization: str = Header(...)):
-    """Header'dan gelen tokeni doğrular."""
-    try:
-        token = authorization  # Authorization başlığından token al
-        decoded_token = verify_jwt_token(token)  # Token doğrulama işlemi
-        return decoded_token.get("uid")  # Doğrulanan kullanıcı kimliği (UID)
+        encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+        # PyJWT 2.0+ sürümlerinde encode işlemi bytes değil string döndürür
+        # Eğer encoded_jwt bir bytes ise string'e çevirelim
+        if isinstance(encoded_jwt, bytes):
+            return encoded_jwt.decode('utf-8')
+        return encoded_jwt
     except Exception as e:
-        raise HTTPException(status_code=401, detail=str(e))
+        logger.error(f"Token oluşturma hatası: {str(e)}")
+        raise
 
+def verify_token(token: str = Depends(oauth2_scheme)):
+    """Token'ı doğrulama ve kullanıcı bilgilerini çıkarma işlemi"""
+    credentials_exception = HTTPException(
+        status_code=401,
+        detail="Token doğrulanırken hata oluştu",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        # PyJWT 2.0+ uyumluluğu için token tipini kontrol edelim
+        # Eğer token zaten bytes tipinde değilse dönüştürelim
+        if isinstance(token, str):
+            # Sadece decode işlemini sabit SECRET_KEY ile yapalım
+            payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        else:
+            logger.error(f"Token tipi beklenmeyen bir format: {type(token)}")
+            raise credentials_exception
+            
+        user_id = payload.get("sub")
+        role: str = payload.get("role")
+        
+        # Kullanıcı ID'si veya rolün olmaması durumunda hata fırlat
+        if user_id is None or role is None:
+            logger.error(f"Token içinde gerekli bilgiler eksik: user_id={user_id}, role={role}")
+            raise credentials_exception
+            
+        # user_id string olarak gelecek, int'e dönüştür
+        try:
+            user_id_int = int(user_id)
+        except (ValueError, TypeError):
+            logger.error(f"user_id tamsayıya dönüştürülemedi: {user_id}")
+            raise credentials_exception
+            
+        # TokenData nesnesine çevir
+        token_data = TokenData(user_id=user_id_int, role=role)
+        return token_data
+    except jwt.ExpiredSignatureError:
+        logger.error("Token süresi dolmuş")
+        raise HTTPException(
+            status_code=401,
+            detail="Token süresi dolmuş, lütfen yeniden giriş yapın",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    except jwt.InvalidTokenError as e:
+        logger.error(f"Geçersiz token: {str(e)}")
+        raise credentials_exception
+    except Exception as e:
+        logger.error(f"Token doğrulama hatası: {str(e)}")
+        raise credentials_exception
+
+# Kullanıcı doğrulama - Token kullanarak mevcut kullanıcıyı getir
+def get_current_user(db: Session = Depends(get_db), token_data: TokenData = Depends(verify_token)):
+    if token_data.role == "dietitian":
+        user = get_dietitian_by_id(db, token_data.user_id)
+    else:
+        user = get_user_by_id(db, token_data.user_id)
+    
+    if user is None:
+        raise HTTPException(status_code=401, detail="Kullanıcı bulunamadı")
+    return user
+
+# Standart yanıt formatı
 def format_response(success: bool, data=None, message=""):
     """Standart bir cevap formatı döndürür."""
+    # JSON serileştirme sorunlarını önlemek için
+    if data is not None:
+        # SQLAlchemy nesneleri veya sözlükler için
+        if hasattr(data, '__dict__'):
+            # SQLAlchemy nesnesini sözlüğe çevir
+            data_dict = {}
+            for key, value in data.__dict__.items():
+                if not key.startswith('_'):  # SQLAlchemy iç değişkenlerini atla
+                    data_dict[key] = _make_json_serializable(value)
+            data = data_dict
+        elif isinstance(data, dict):
+            # Sözlük ise içindeki değerleri kontrol et
+            data = {k: _make_json_serializable(v) for k, v in data.items()}
+        elif isinstance(data, list):
+            # Liste ise her öğeyi kontrol et
+            data = [_make_json_serializable(item) for item in data]
+    
     return JSONResponse(content={"success": success, "data": data, "message": message})
 
+def _make_json_serializable(obj):
+    """Herhangi bir nesneyi JSON'a dönüştürülebilir hale getirir."""
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    elif hasattr(obj, '__dict__'):
+        # İç içe nesneler için
+        result = {}
+        for key, value in obj.__dict__.items():
+            if not key.startswith('_'):
+                result[key] = _make_json_serializable(value)
+        return result
+    elif isinstance(obj, list):
+        return [_make_json_serializable(item) for item in obj]
+    elif isinstance(obj, dict):
+        return {k: _make_json_serializable(v) for k, v in obj.items()}
+    else:
+        return obj
+
+# Global exception handler
+@app.exception_handler(Exception)
+async def global_exception_handler(request, exc):
+    error_detail = ''.join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+    logger.error(f"Beklenmeyen hata: {error_detail}")
+    return JSONResponse(
+        status_code=500,
+        content={"success": False, "message": f"Internal Server Error: {str(exc)}", "error_detail": error_detail if app.debug else None},
+    )
+
+# Token endpoint'i - kullanıcı kimlik doğrulama
+@app.post("/token", response_model=Token)
+async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+    # Önce kullanıcı olarak kontrol et
+    user = authenticate_user(db, form_data.username, form_data.password)
+    role = "user"
+    
+    # Kullanıcı bulunamadıysa diyetisyen olarak kontrol et
+    if not user:
+        user = authenticate_dietitian(db, form_data.username, form_data.password)
+        role = "dietitian"
+    
+    if not user:
+        raise HTTPException(
+            status_code=401,
+            detail="Yanlış kullanıcı adı veya şifre",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    # Kullanıcı ID'sini ve rolünü tokena ekle
+    user_id = user.user_id if role == "user" else user.dietitian_id
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(
+        data={"sub": user_id, "role": role}, expires_delta=access_token_expires
+    )
+    
+    return {"access_token": access_token, "token_type": "bearer"}
+
+# Kullanıcı yönetimi
+@app.post("/register/user", response_model=UserResponse)
+async def register_user(user_data: UserCreate, db: Session = Depends(get_db)):
+    # Email kontrolü
+    db_user = get_user_by_email(db, user_data.email)
+    if db_user:
+        raise HTTPException(status_code=400, detail="Bu email zaten kullanılıyor")
+    
+    # Kullanıcı verilerini hazırla
+    user_dict = user_data.dict()
+    
+    # Kullanıcıyı oluştur
+    new_user = create_user(db, user_dict)
+    
+    return UserResponse(
+        user_id=new_user.user_id,
+        name=new_user.name,
+        email=new_user.email,
+        role="user"
+    )
+
+@app.post("/register/dietitian", response_model=DietitianResponse)
+async def register_dietitian(dietitian_data: DietitianCreate, db: Session = Depends(get_db)):
+    # Email kontrolü
+    db_dietitian = get_dietitian_by_email(db, dietitian_data.email)
+    if db_dietitian:
+        raise HTTPException(status_code=400, detail="Bu email zaten kullanılıyor")
+    
+    # Diyetisyen verilerini hazırla
+    dietitian_dict = dietitian_data.dict()
+    
+    # Diyetisyeni oluştur
+    new_dietitian = create_dietitian(db, dietitian_dict)
+    
+    return new_dietitian
+
 @app.post("/login/")
-async def login(credentials: dict = Body(...)):
+async def login(credentials: UserAuth, db: Session = Depends(get_db)):
     """
     Kullanıcı giriş endpoint'i.
     """
     try:
-        email = credentials.get("email")
-        password = credentials.get("password")
+        # Önce kullanıcı olarak kontrol et
+        user = authenticate_user(db, credentials.email, credentials.password)
+        role = "user"
         
-        # Firestore'da kullanıcıyı sorgula
-        users_ref = db.collection("user")
-        query = users_ref.where("email", "==", email).where("password", "==", password).limit(1)
-        docs = query.stream()
-
-        # Kullanıcıyı kontrol et
-        user_data = None
-        for doc in docs:
-            user_data = doc.to_dict()
-            user_data["uid"] = doc.id
-            break
-
-        if user_data:
-            # Kullanıcı için JWT token oluştur
-            token = create_jwt_token({"uid": user_data["uid"]})
-            return format_response(True, {"token": token}, "Giriş başarılı.")
-        else:
-            return format_response(False, None, "Kullanıcı bulunamadı.")
-    except Exception as e:
-        return format_response(False, None, f"Bir hata oluştu: {str(e)}")
-
-@app.post("/users/")
-def create_user(user: User):
-    """ Kullanıcı ekler ve token döndürür """
-    try:
-        result = add_user(user)
-        token = create_jwt_token({"uid": result["uid"]})
-        return format_response(True, {"token": token}, "Kullanıcı başarıyla oluşturuldu.")
+        # Kullanıcı bulunamadıysa diyetisyen olarak kontrol et
+        if not user:
+            user = authenticate_dietitian(db, credentials.email, credentials.password)
+            role = "dietitian"
+        
+        if not user:
+            return format_response(False, None, "Kullanıcı bulunamadı veya şifre yanlış")
+        
+        # Kullanıcı ID'sini ve rolünü tokena ekle
+        user_id = user.user_id if role == "user" else user.dietitian_id
+        access_token = create_access_token(data={"sub": user_id, "role": role})
+        
+        return format_response(True, {"token": access_token, "role": role}, "Giriş başarılı.")
     except Exception as e:
         return format_response(False, None, f"Bir hata oluştu: {str(e)}")
 
 @app.get("/users/me")
-def read_user(uid: str = Depends(verify_token_header)):
-    """Token doğrulandıktan sonra kullanıcı bilgilerini döndür."""
-    try:
-        result = get_user(uid)
-        
-        # Tarih alanlarını dönüştür
-        for key, value in result.items():
-            if isinstance(value, datetime):
-                result[key] = value.isoformat()
-        
-        return format_response(True, result, "Kullanıcı bilgileri başarıyla alındı.")
-    except Exception as e:
-        return format_response(False, None, f"Bir hata oluştu: {str(e)}")
+async def read_users_me(current_user: User = Depends(get_current_user)):
+    """Giriş yapmış kullanıcı bilgilerini döndürür."""
+    return current_user
+
+@app.put("/users/me")
+async def update_user_me(user_data: dict, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Giriş yapmış kullanıcı bilgilerini günceller."""
+    # token_data = verify_token() yerine current_user'ı kullan
+    
+    if hasattr(current_user, 'user_id'):  # Kullanıcı
+        updated_user = update_user(db, current_user.user_id, user_data)
+        return format_response(True, updated_user, "Kullanıcı bilgileri başarıyla güncellendi.")
+    else:  # Diyetisyen
+        updated_dietitian = update_dietitian(db, current_user.dietitian_id, user_data)
+        return format_response(True, updated_dietitian, "Diyetisyen bilgileri başarıyla güncellendi.")
 
 @app.delete("/users/me")
-def remove_user(uid: str = Depends(verify_token_header)):
-    """ Token doğrulandıktan sonra kullanıcıyı siler """
-    try:
-        result = delete_user(uid)
+async def delete_user_me(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Giriş yapmış kullanıcıyı siler."""
+    # current_user bilgilerinden rol kontrolü yapalım
+    
+    if hasattr(current_user, 'user_id'):  # Kullanıcı
+        result = delete_user(db, current_user.user_id)
         return format_response(True, result, "Kullanıcı başarıyla silindi.")
-    except Exception as e:
-        return format_response(False, None, f"Bir hata oluştu: {str(e)}")
+    else:  # Diyetisyen
+        result = delete_dietitian(db, current_user.dietitian_id)
+        return format_response(True, result, "Diyetisyen başarıyla silindi.")
 
-# Uploads klasörünü dışarıdan erişilebilir hale getiriyoruz
-UPLOAD_FOLDER = "uploads"
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-
-@app.post("/post/")
-async def create_post(
-    post_id: str = Form(...),
-    user_id: str = Depends(verify_token_header),
+# Post işlemleri
+@app.post("/post/", response_model=PostResponse)
+async def create_new_post(
     content: str = Form(...),
-    timestamp: str = Form(...),
-    image: UploadFile = File(None)  # Resim isteğe bağlıdır
+    image: UploadFile = File(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """Yeni bir post oluşturur ve resmini yükler"""
+    # current_user bilgilerinden kullanıcı doğrulaması yapıyoruz
+    
+    # Sadece normal kullanıcılar post oluşturabilir
+    if not hasattr(current_user, 'user_id'):
+        raise HTTPException(status_code=403, detail="Sadece kullanıcılar post oluşturabilir")
+    
     try:
-        post = Post(
-            post_id=post_id,
-            user_id=user_id,
-            content=content,
-            timestamp=timestamp,
-        )
-        result = save_post(post, image)
-        return format_response(True, result, "Post başarıyla oluşturuldu.")
+        post = create_post(db, current_user.user_id, content, image)
+        return post
     except Exception as e:
-        return format_response(False, None, f"Bir hata oluştu: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Post oluşturulurken bir hata oluştu: {str(e)}")
 
 # Yüklenen resimleri sunucu üzerinden görüntüleyebilmek için
 @app.get("/uploads/{filename}")
 async def get_uploaded_file(filename: str):
-    return FileResponse(f"uploads/{filename}")
+    file_path = os.path.join(UPLOAD_FOLDER, filename)
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="Dosya bulunamadı")
+    return FileResponse(file_path)
 
-# ! şuan için bu endpoint istediğim şekilde çalışmamaktadır
 # Tarif isimlerini dönen endpoint
 @app.post("/get-recipe-names/")
-async def get_recipe_names(
-    keyword: str = Form(...)
-):
+async def get_recipe_names(keyword: str = Form(...)):
     """
     Keyword'e göre tariflerin isimlerini dönen bir endpoint.
     """
@@ -204,101 +423,79 @@ async def get_recipe_names(
     except Exception as e:
         return format_response(False, None, f"Bir hata oluştu: {str(e)}")
 
-
 @app.post("/comments/")
-async def create_comment(comment: PostComment, uid: str = Depends(verify_token_header)):
+async def create_comment(
+    post_id: int,
+    content: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
     """Belirtilen post'a yorum ekler"""
-    return add_comment(comment)
+    # Sadece normal kullanıcılar yorum ekleyebilir
+    if not hasattr(current_user, 'user_id'):
+        raise HTTPException(status_code=403, detail="Sadece kullanıcılar yorum ekleyebilir")
+    
+    try:
+        comment = add_comment(db, post_id, current_user.user_id, content)
+        return comment
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Yorum eklenirken bir hata oluştu: {str(e)}")
 
-@app.delete("/comments/{post_id}/{comment_id}")
-async def remove_comment(post_id: str, comment_id: str, uid: str = Depends(verify_token_header)):
-    """Bir posttaki yorumu siler"""
-    return delete_comment(post_id, comment_id)
+@app.delete("/comments/{comment_id}")
+async def remove_comment(
+    comment_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Bir yorumu siler"""
+    try:
+        result = delete_comment(db, comment_id)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Yorum silinirken bir hata oluştu: {str(e)}")
 
 @app.put("/post/{post_id}")
-async def modify_post(post_id: str, content: str, uid: str = Depends(verify_token_header)):
+async def modify_post(
+    post_id: int,
+    content: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
     """Bir post'un içeriğini günceller"""
-    return update_post(post_id, content)
+    try:
+        post = update_post(db, post_id, content)
+        return post
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Post güncellenirken bir hata oluştu: {str(e)}")
 
 @app.delete("/post/{post_id}")
-async def remove_post(post_id: str, uid: str = Depends(verify_token_header)):
+async def remove_post(
+    post_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
     """Bir post'u tamamen siler"""
-    return delete_post(post_id)
-
-@app.post("/register/")
-def register_user(user: UserCreate):
-    """Yeni bir kullanıcı kaydı oluşturur ve rolüne göre ilgili koleksiyonlarda bilgilerini saklar."""
     try:
-        # Firebase Authentication'da kullanıcı oluştur
-        firebase_user = auth.create_user(email=user.email, password=user.password)
-        user_id = firebase_user.uid
-        
-        # Ana users koleksiyonuna kaydet
-        user_data = user_to_dict(user)
-        db.collection("users").document(user_id).set(user_data)
-        
-        # Rolüne göre detayları kaydet
-        if user.role == Role.USER:
-            # Kullanıcı detaylarının zorunlu olduğunu kontrol et
-            if user.age is None or user.weight is None or user.height is None or user.goal is None or user.activity_level is None:
-                raise HTTPException(status_code=400, detail="Kullanıcı detayları eksik")
-            
-            user_details = user_details_to_dict(user_id, user)
-            db.collection("user_details").document(user_id).set(user_details)
-        
-        elif user.role == Role.DIETITIAN:
-            # Diyetisyen detaylarının zorunlu olduğunu kontrol et
-            if user.experience is None or user.specialization is None:
-                raise HTTPException(status_code=400, detail="Diyetisyen detayları eksik")
-            
-            dietitian_details = dietitian_details_to_dict(user_id, user)
-            db.collection("dietitian_details").document(user_id).set(dietitian_details)
-        
-        # Admin rolü için ek bilgi gerekmez
-        
-        # Kullanıcı için token oluştur
-        token = auth.create_custom_token(user_id)
-        
-        return format_response(
-            True, 
-            {"uid": user_id, "token": token.decode("utf-8")}, 
-            "Kullanıcı başarıyla oluşturuldu."
-        )
+        result = delete_post(db, post_id)
+        return result
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Kayıt sırasında bir hata oluştu: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Post silinirken bir hata oluştu: {str(e)}")
 
-@app.post("/register-dietitian/")
-def register_dietitian(dietitian: DietitianCreate):
-    """Diyetisyen kaydı için özel endpoint. Diyetisyen bilgilerini ayrı bir koleksiyonda saklar."""
-    try:
-        # Firebase Authentication'da kullanıcı oluştur
-        firebase_user = auth.create_user(email=dietitian.email, password=dietitian.password)
-        dietitian_id = firebase_user.uid
-        
-        # Diyetisyen bilgilerini dietitians koleksiyonuna kaydet
-        dietitian_data = dietitian_to_dict(dietitian)
-        db.collection("dietitians").document(dietitian_id).set(dietitian_data)
-        
-        # Kullanıcı için token oluştur
-        token = auth.create_custom_token(dietitian_id)
-        
-        return format_response(
-            True, 
-            {"uid": dietitian_id, "token": token.decode("utf-8")}, 
-            "Diyetisyen başarıyla kaydedildi."
-        )
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Diyetisyen kaydı sırasında bir hata oluştu: {str(e)}")
-
-# Diet önerisi için endpoint
+# Yapay zeka endpointleri
 @app.post("/predict/diet-list/")
-async def predict_diet_list(request: DietRequest):
+async def predict_diet_list(request: DietRequest, db: Session = Depends(get_db)):
     try:
         # İstek tipine göre diyet listesi oluştur
         if request.diet_type.lower() == "turkish":
             diet_list = create_diet_list_turkish(request.calorie_limit)
         else:
             diet_list = create_diet_list(request.calorie_limit)
+        
+        # Eğer anahtar kelime belirtilmişse filtreleme yap
+        if request.keyword:
+            diet_list = filter_recipes_by_keyword(diet_list, request.keyword.value)
+            if diet_list.empty:
+                return format_response(False, None, f"'{request.keyword.value}' anahtar kelimesine uygun tarif bulunamadı")
             
         # Eğer tercihler belirtilmişse filtreleme yap
         if request.preferences:
@@ -308,38 +505,39 @@ async def predict_diet_list(request: DietRequest):
                 ingredients = str(recipe.get('RecipeIngredientParts', ''))
                 if any(pref.lower() in ingredients.lower() for pref in request.preferences):
                     filtered_diet_list.append(recipe.to_dict())
-            return {"diet_list": filtered_diet_list, "total_recipes": len(filtered_diet_list)}
-        
-        # Eğer keyword belirtilmişse filtreleme yap
-        if request.keyword:
-            diet_list = filter_recipes_by_keyword(diet_list, request.keyword)
+            
+            if not filtered_diet_list:
+                return format_response(False, None, "Belirtilen tercihlere uygun tarif bulunamadı")
+                
+            return format_response(True, {"diet_list": filtered_diet_list, "total_recipes": len(filtered_diet_list)}, "Diyet listesi başarıyla oluşturuldu.")
         
         # Tercihlere göre filtreleme yapılmadıysa tüm listeyi döndür
-        return {"diet_list": diet_list.to_dict('records'), "total_recipes": len(diet_list)}
+        return format_response(True, {"diet_list": diet_list.to_dict('records'), "total_recipes": len(diet_list)}, "Diyet listesi başarıyla oluşturuldu.")
     
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Diet listesi oluşturulurken bir hata oluştu: {str(e)}")
+        return format_response(False, None, f"Diet listesi oluşturulurken bir hata oluştu: {str(e)}")
 
-# Benzer tarifleri öneri için endpoint
 @app.post("/predict/recipe-recommendations/")
-async def predict_recipe_recommendations(request: RecipeRequest):
+async def predict_recipe_recommendations(request: RecipeRequest, db: Session = Depends(get_db)):
     try:
         if request.is_turkish:
             recommendations = recommend_recipes_turkish(request.recipe_index, request.n_recommendations)
         else:
             recommendations = recommend_recipes(request.recipe_index, request.n_recommendations)
             
-        return {"recommendations": recommendations.to_dict('records'), "total_recipes": len(recommendations)}
+        return format_response(True, {"recommendations": recommendations.to_dict('records'), "total_recipes": len(recommendations)}, "Tarif önerileri başarıyla alındı.")
     
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Tarif önerileri alınırken bir hata oluştu: {str(e)}")
+        return format_response(False, None, f"Tarif önerileri alınırken bir hata oluştu: {str(e)}")
 
-# Model tahminleri için endpoint (sabit parametrelere göre)
 @app.post("/predict/nutrition/")
-async def predict_nutrition(data: dict):
+async def predict_nutrition(data: dict, db: Session = Depends(get_db)):
     try:
         # Model dosyasının yolu
         model_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'models', 'trained_model.pkl')
+        
+        print(f"Model dosya yolu: {model_path}")
+        print(f"Dosya mevcut mu: {os.path.exists(model_path)}")
         
         # Modeli yükle
         model = joblib.load(model_path)
@@ -351,36 +549,126 @@ async def predict_nutrition(data: dict):
             'fats': [data.get('fats', 0)]
         })
         
+        print(f"Girdi özellikleri: {features}")
+        
         # Tahmin yap
         prediction = model.predict(features)[0]
         
-        return {
+        return format_response(True, {
             "predicted_calories": float(prediction),
             "input_features": data
-        }
+        }, "Kalori tahmini başarıyla yapıldı.")
     
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Tahmin yapılırken bir hata oluştu: {str(e)}")
+        import traceback
+        error_detail = traceback.format_exc()
+        print(f"Hata detayı: {error_detail}")
+        return format_response(False, None, f"Tahmin yapılırken bir hata oluştu: {str(e)}")
 
-# Yapay zeka modeline doğrudan metin isteği göndermek için endpoint
 @app.post("/predict/ai-query/")
-async def ai_query(data: dict):
+async def ai_query(data: dict, db: Session = Depends(get_db)):
     try:
         query = data.get("query", "")
         if not query:
-            raise HTTPException(status_code=400, detail="Sorgu metni boş olamaz")
+            return format_response(False, None, "Sorgu metni boş olamaz")
             
         # Bu kısımda kendi yapay zeka modelinize istek gönderecek kod olmalı
         # Örnek olarak basit bir yanıt döndürüyoruz
         response = f"Sorgunuz için öneriler: '{query}' için yapay zeka modeli yanıtı"
         
-        return {
+        return format_response(True, {
             "query": query,
             "response": response
-        }
+        }, "AI sorgusu başarıyla işlendi.")
     
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Yapay zeka sorgusu sırasında bir hata oluştu: {str(e)}")
+        return format_response(False, None, f"Yapay zeka sorgusu sırasında bir hata oluştu: {str(e)}")
+
+# Randevu işlemleri
+@app.post("/appointments/")
+async def create_appointment(
+    appointment_data: AppointmentCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Yeni bir randevu oluşturur"""
+    # token_data yerine current_user kullan
+    
+    # Randevu oluştur
+    db_appointment = Appointment(
+        user_id=appointment_data.user_id,
+        dietitian_id=appointment_data.dietitian_id,
+        date_time=appointment_data.date_time,
+        status=appointment_data.status
+    )
+    
+    try:
+        db.add(db_appointment)
+        db.commit()
+        db.refresh(db_appointment)
+        return format_response(True, db_appointment, "Randevu başarıyla oluşturuldu.")
+    except Exception as e:
+        db.rollback()
+        return format_response(False, None, f"Randevu oluşturulurken bir hata oluştu: {str(e)}")
+
+@app.get("/appointments/{appointment_id}")
+async def get_appointment(
+    appointment_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Belirli bir randevuyu getirir"""
+    db_appointment = db.query(Appointment).filter(Appointment.appointment_id == appointment_id).first()
+    
+    if not db_appointment:
+        return format_response(False, None, "Randevu bulunamadı")
+    
+    return format_response(True, db_appointment, "Randevu başarıyla getirildi.")
+
+@app.get("/users/{user_id}/appointments/")
+async def get_user_appointments(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Kullanıcının randevularını getirir"""
+    db_appointments = db.query(Appointment).filter(Appointment.user_id == user_id).all()
+    
+    return format_response(True, db_appointments, "Kullanıcı randevuları başarıyla getirildi.")
+
+@app.get("/dietitians/{dietitian_id}/appointments/")
+async def get_dietitian_appointments(
+    dietitian_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Diyetisyenin randevularını getirir"""
+    db_appointments = db.query(Appointment).filter(Appointment.dietitian_id == dietitian_id).all()
+    
+    return format_response(True, db_appointments, "Diyetisyen randevuları başarıyla getirildi.")
+
+@app.put("/appointments/{appointment_id}")
+async def update_appointment_status(
+    appointment_id: int,
+    status: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Randevu durumunu günceller"""
+    db_appointment = db.query(Appointment).filter(Appointment.appointment_id == appointment_id).first()
+    
+    if not db_appointment:
+        return format_response(False, None, "Randevu bulunamadı")
+    
+    db_appointment.status = status
+    
+    try:
+        db.commit()
+        db.refresh(db_appointment)
+        return format_response(True, db_appointment, "Randevu durumu başarıyla güncellendi.")
+    except Exception as e:
+        db.rollback()
+        return format_response(False, None, f"Randevu durumu güncellenirken bir hata oluştu: {str(e)}")
 
 # Sağlık kontrolü için bir endpoint
 @app.get("/health")
@@ -395,6 +683,9 @@ async def root():
         "docs_url": "/docs",
         "redoc_url": "/redoc"
     }
+
+# Debug modu ayarı
+app.debug = True  # Geliştirme ortamında debug modu açık
 
 # Uygulamayı başlatmak için (uvicorn ile çalıştırılabilir)
 if __name__ == "__main__":

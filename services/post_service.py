@@ -1,93 +1,155 @@
-from firebase import db
-from models.post import Post, PostComment
-from firebase_admin import  firestore
+from sqlalchemy.orm import Session
+from models.post import PostDB, PostCommentDB, Post, PostComment
+from fastapi import HTTPException, UploadFile
+import logging
 import os
-from fastapi import UploadFile
+import shutil
+from datetime import datetime
+from typing import List, Optional
 
 UPLOAD_FOLDER = "uploads"  # Resimlerin kaydedileceği klasör
-POSTS_COLLECTION = "post"  # Firestore koleksiyon adı
 
 # Klasör yoksa oluştur
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-def save_post(post: Post, image: UploadFile = None):
-    """Post'u kaydeder ve resmi sunucuda saklar"""
-    image_url = None  # Başlangıçta boş
-
-    if image:
-        file_extension = image.filename.split(".")[-1]
-        image_filename = f"{post.post_id}.{file_extension}"
-        image_path = os.path.join(UPLOAD_FOLDER, image_filename)
-
-        # Resmi sunucuda kaydet
-        with open(image_path, "wb") as img_file:
-            img_file.write(image.file.read())
-
-        # Sunucuda saklanan resmin URL’sini oluştur
-        image_url = f"http://127.0.0.1:8000/{UPLOAD_FOLDER}/{image_filename}"
+def save_uploaded_file(upload_file: UploadFile, user_id: int, post_id: int) -> str:
+    """Yüklenen dosyayı kaydeder ve dosya yolunu döndürür"""
+    if not upload_file:
+        return None
     
-    # Postu kaydederken resim URL'sini ekleyelim
-    post.image_url = image_url
+    # Uploads klasörünü oluştur
+    upload_dir = "uploads"
+    os.makedirs(upload_dir, exist_ok=True)
     
-    # Firestore'a postu kaydedelim
-    db = firestore.client()
-    doc_ref = db.collection(POSTS_COLLECTION).document(post.post_id)
-    doc_ref.set(post.dict())
-
-    return {"message": "Post başarıyla eklendi", "post": post.dict()}
-
-# Yorum eklemek için servis fonksiyonu
-def add_comment(comment: PostComment):
-    """Bir posta yorum ekler"""
-    doc_ref = db.collection("post").document(comment.post_id)
-    post = doc_ref.get()
+    # Dosya adını oluştur: user_id_post_id_filename
+    filename = f"{user_id}_{post_id}_{upload_file.filename}"
+    file_path = os.path.join(upload_dir, filename)
     
-    if post.exists:
-        post_data = post.to_dict()
-        if "comments" not in post_data:
-            post_data["comments"] = []
+    # Dosyayı kaydet
+    try:
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(upload_file.file, buffer)
+    except Exception as e:
+        logging.error(f"Dosya kaydedilirken hata: {str(e)}")
+        raise HTTPException(status_code=500, detail="Dosya kaydedilemedi")
+    
+    return file_path
+
+def create_post(db: Session, user_id: int, content: str, image: Optional[UploadFile] = None):
+    """Yeni bir gönderi oluşturur"""
+    # Gönderi oluştur
+    db_post = PostDB(
+        user_id=user_id,
+        content=content,
+        timestamp=datetime.now()
+    )
+    
+    try:
+        db.add(db_post)
+        db.commit()
+        db.refresh(db_post)
         
-        # Yeni yorumu ekleyelim
-        post_data["comments"].append(comment.dict())
+        # Eğer resim varsa kaydet ve bağlantıyı güncelle
+        if image:
+            file_path = save_uploaded_file(image, user_id, db_post.post_id)
+            db_post.image_url = file_path
+            db.commit()
+            db.refresh(db_post)
         
-        # Güncellenmiş veriyi Firestore'a kaydedelim
-        doc_ref.set(post_data)
-        return {"message": "Yorum başarıyla eklendi"}
+        return db_post
+    except Exception as e:
+        db.rollback()
+        logging.error(f"Gönderi oluşturulurken hata: {str(e)}")
+        raise
+
+def get_post(db: Session, post_id: int):
+    """Gönderiyi ID ile getirir"""
+    return db.query(PostDB).filter(PostDB.post_id == post_id).first()
+
+def get_posts(db: Session, skip: int = 0, limit: int = 100):
+    """Tüm gönderileri getirir"""
+    return db.query(PostDB).order_by(PostDB.timestamp.desc()).offset(skip).limit(limit).all()
+
+def get_user_posts(db: Session, user_id: int, skip: int = 0, limit: int = 100):
+    """Belirli bir kullanıcının gönderilerini getirir"""
+    return db.query(PostDB).filter(PostDB.user_id == user_id).order_by(PostDB.timestamp.desc()).offset(skip).limit(limit).all()
+
+def update_post(db: Session, post_id: int, content: str):
+    """Gönderi içeriğini günceller"""
+    db_post = get_post(db, post_id)
+    if not db_post:
+        raise HTTPException(status_code=404, detail="Gönderi bulunamadı")
     
-    return {"error": "Post bulunamadı"}
+    db_post.content = content
+    
+    try:
+        db.commit()
+        db.refresh(db_post)
+        return db_post
+    except Exception as e:
+        db.rollback()
+        logging.error(f"Gönderi güncellenirken hata: {str(e)}")
+        raise
 
-def delete_comment(post_id: str, comment_id: str):
-    """Belirtilen post'tan bir yorumu siler"""
-    doc_ref = db.collection(POSTS_COLLECTION).document(post_id)
-    post = doc_ref.get()
-
-    if post.exists:
-        post_data = post.to_dict()
-        post_data["comments"] = [c for c in post_data.get("comments", []) if c["comment_id"] != comment_id]
+def delete_post(db: Session, post_id: int):
+    """Gönderiyi siler"""
+    db_post = get_post(db, post_id)
+    if not db_post:
+        raise HTTPException(status_code=404, detail="Gönderi bulunamadı")
+    
+    try:
+        # Önce, gönderi ile ilişkili resim varsa silinmeli
+        if db_post.image_url and os.path.exists(db_post.image_url):
+            os.remove(db_post.image_url)
         
-        doc_ref.set(post_data)
+        db.delete(db_post)
+        db.commit()
+        return {"message": "Gönderi başarıyla silindi"}
+    except Exception as e:
+        db.rollback()
+        logging.error(f"Gönderi silinirken hata: {str(e)}")
+        raise
+
+def add_comment(db: Session, post_id: int, user_id: int, content: str):
+    """Gönderiye yorum ekler"""
+    # Gönderi kontrolü
+    db_post = get_post(db, post_id)
+    if not db_post:
+        raise HTTPException(status_code=404, detail="Gönderi bulunamadı")
+    
+    # Yorum oluştur
+    db_comment = PostCommentDB(
+        post_id=post_id,
+        user_id=user_id,
+        content=content,
+        timestamp=datetime.now()
+    )
+    
+    try:
+        db.add(db_comment)
+        db.commit()
+        db.refresh(db_comment)
+        return db_comment
+    except Exception as e:
+        db.rollback()
+        logging.error(f"Yorum eklenirken hata: {str(e)}")
+        raise
+
+def get_comments(db: Session, post_id: int, skip: int = 0, limit: int = 100):
+    """Gönderinin yorumlarını getirir"""
+    return db.query(PostCommentDB).filter(PostCommentDB.post_id == post_id).order_by(PostCommentDB.timestamp.desc()).offset(skip).limit(limit).all()
+
+def delete_comment(db: Session, comment_id: int):
+    """Yorumu siler"""
+    db_comment = db.query(PostCommentDB).filter(PostCommentDB.comment_id == comment_id).first()
+    if not db_comment:
+        raise HTTPException(status_code=404, detail="Yorum bulunamadı")
+    
+    try:
+        db.delete(db_comment)
+        db.commit()
         return {"message": "Yorum başarıyla silindi"}
-
-    return {"error": "Post bulunamadı"}
-
-def update_post(post_id: str, content: str):
-    """Bir post'un içeriğini günceller"""
-    doc_ref = db.collection(POSTS_COLLECTION).document(post_id)
-    post = doc_ref.get()
-
-    if post.exists:
-        doc_ref.update({"content": content})
-        return {"message": "Post başarıyla güncellendi"}
-
-    return {"error": "Post bulunamadı"}
-
-def delete_post(post_id: str):
-    """Bir post'u siler"""
-    doc_ref = db.collection(POSTS_COLLECTION).document(post_id)
-    post = doc_ref.get()
-
-    if post.exists:
-        doc_ref.delete()
-        return {"message": "Post başarıyla silindi"}
-
-    return {"error": "Post bulunamadı"}
+    except Exception as e:
+        db.rollback()
+        logging.error(f"Yorum silinirken hata: {str(e)}")
+        raise

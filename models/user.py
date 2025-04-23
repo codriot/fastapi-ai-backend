@@ -1,7 +1,10 @@
 from datetime import datetime
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 from enum import Enum
+from sqlalchemy import Column, Integer, String, Float, DateTime
+from sqlalchemy.orm import relationship
+from database import Base
 
 class Role(str, Enum):
     USER = "user"
@@ -49,20 +52,29 @@ class DietitianDetails(BaseModel):
     experience: str
     specialization: str
 
-class User(BaseModel):
-    uid: str
-    email: str
-    password: str  # Güvenlik için hashlenmeli
-    apple_login: Optional[str] = None
-    google_login: Optional[str] = None
-    gender: str
-    age: int
-    weight: float
-    height: float
-    favorite_foods: List[str]
-    goal: str
-    dietitian_id: Optional[str] = None
-    created_at: datetime
+class User(Base):
+    __tablename__ = "users"
+
+    user_id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(100), nullable=False)
+    email = Column(String(150), unique=True, index=True)
+    password = Column(String(255))
+    age = Column(Integer)
+    gender = Column(String(10))
+    height = Column(Float)
+    weight = Column(Float)
+    goal = Column(String(100))
+    activity_level = Column(String(20))
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    auth_provider = Column(String(50), default="email", nullable=False) 
+    provider_id = Column(String(255))
+
+    # İlişkiler - Basit sınıf adları kullanarak
+    appointments = relationship("Appointment", back_populates="user")
+    ai_outputs = relationship("AIModelOutput", back_populates="user")
+    progress_records = relationship("ProgressTracking", back_populates="user")
+    sent_messages = relationship("Message", foreign_keys="Message.sender_id", back_populates="sender")
 
 # Özel kayıt modeli (firebase ile uyumlu)
 class RegisterUser(BaseModel):
