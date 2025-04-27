@@ -1,0 +1,30 @@
+[tool.poetry]
+name = "fastapi-ai-backend"
+version = "0.1.0"
+description = "Diet App Backend API with FastAPI and AI"
+authors = ["Your Name <your.email@example.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.9"
+fastapi = "^0.115.8"
+uvicorn = "^0.34.0"
+sqlalchemy = "^2.0.30"
+pydantic = "^2.10.6"
+python-jose = "^3.3.0"
+python-multipart = "^0.0.9"
+bcrypt = "^4.1.2"
+passlib = "^1.7.4"
+psycopg2-binary = "^2.9.9"
+python-dotenv = "^1.0.1"
+google-cloud-firestore = "^2.20.0"
+pandas = "*"
+scikit-learn = "*"
+joblib = "*"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^7.4.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
