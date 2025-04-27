@@ -21,6 +21,7 @@ google-cloud-firestore = "^2.20.0"
 pandas = "*"
 scikit-learn = "*"
 joblib = "*"
+PyJWT = "^2.8.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.4.0"
