@@ -729,7 +729,7 @@ async def predict_nutrition_profile(request: ProfileRequest):
 
 @app.post("/predict/user-nutrition/")
 async def predict_user_nutrition(
-    goal: str = Body("maintenance"),
+    goal: str = Body("maintenance", embed=True),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -789,6 +789,87 @@ async def predict_user_nutrition(
             "status": "Obez" if bke >= 30 else "Kilolu" if bke >= 25 else "Normal" if bke >= 18.5 else "Zayıf",
             "ideal_weight": round(ideal, 2),
             "weight_difference": round(weight - ideal, 2),
+            "meals": {k: round(v, 2) for k, v in meals.items()},
+            "macros": {
+                "protein": round(macros["protein_g"], 2),
+                "carbs": round(macros["carbs_g"], 2),
+                "fat": round(macros["fat_g"], 2)
+            }
+        }, "Kalori ihtiyacınız ve öğün dağılımınız başarıyla hesaplandı.")
+            
+    except Exception as e:
+        logger.error(f"Kullanıcı beslenme analizi hatası: {str(e)}")
+        logger.error(traceback.format_exc())
+        return format_response(False, None, f"Bir hata oluştu: {str(e)}")
+
+@app.get("/predict/user-nutrition/")
+async def get_user_nutrition(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Kullanıcının bilgilerine ve kaydedilmiş hedefine göre kalori ihtiyacını ve öğün dağılımını hesaplar.
+    GET isteği kullanarak kullanıcının veritabanındaki goal değerini kullanır.
+    """
+    try:
+        # Kullanıcının kullanıcı tipi kontrolü
+        if not hasattr(current_user, 'user_id'):
+            return format_response(False, None, "Bu işlem için kullanıcı olarak giriş yapmalısınız")
+        
+        # Kullanıcı bilgilerini al
+        weight = current_user.weight
+        height = current_user.height
+        age = current_user.age
+        gender = current_user.gender
+        
+        # Gerekli alanların eksikliği kontrolü
+        if not all([weight, height, age, gender]):
+            missing_fields = []
+            if not weight: missing_fields.append("kilo")
+            if not height: missing_fields.append("boy")
+            if not age: missing_fields.append("yaş")
+            if not gender: missing_fields.append("cinsiyet")
+            
+            return format_response(False, None, f"Lütfen profil bilgilerinizi güncelleyin. Eksik bilgiler: {', '.join(missing_fields)}")
+        
+        # Aktivite seviyesi kontrolü
+        activity_level = getattr(current_user, 'activity_level', "sedentary")
+        if not activity_level:
+            activity_level = "sedentary"
+        
+        # Kullanıcının hedefini al - veritabanında kayıtlı olan
+        goal = current_user.goal
+
+        # Eğer goal tanımlanmamışsa "maintenance" olarak varsay
+        if not goal or goal.lower() not in ["maintenance", "weight_loss", "muscle_building"]:
+            goal = "maintenance"
+        
+        # Günlük kalori ihtiyacı hesaplama
+        total_calories, bke = daily_calorie_requirements(weight, height, age, gender, activity_level)
+        
+        # Hedef düzenleme (kilo verme ise %15 azalt, kas kazanma ise %10 arttır)
+        if goal.lower() == "weight_loss":
+            total_calories = total_calories * 0.85  # %15 azalt
+        elif goal.lower() == "muscle_building":
+            total_calories = total_calories * 1.10  # %10 arttır
+        
+        # Öğün dağılımı
+        meals = meal_distribution(total_calories)
+        
+        # Makro besin dağılımı
+        macros = calculate_macros(total_calories, weight, goal)
+        
+        # İdeal kilo
+        ideal = ideal_weight(height, gender)
+        
+        return format_response(True, {
+            "total_calories": round(total_calories, 2),
+            "bke": round(bke, 2),
+            "status": "Obez" if bke >= 30 else "Kilolu" if bke >= 25 else "Normal" if bke >= 18.5 else "Zayıf",
+            "ideal_weight": round(ideal, 2),
+            "weight_difference": round(weight - ideal, 2),
+            "goal": goal,
+            "activity_level": activity_level,
             "meals": {k: round(v, 2) for k, v in meals.items()},
             "macros": {
                 "protein": round(macros["protein_g"], 2),
