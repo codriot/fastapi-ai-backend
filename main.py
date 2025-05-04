@@ -31,8 +31,9 @@ from models.message import Message, MessageCreate, MessageResponse
 from models.post import PostDB, PostCommentDB, Post, PostComment, PostCreate, PostResponse
 # Diyet öneri modülünü import ediyoruz
 from models.nutrition_model import (
-    NutritionRequest, NutritionProfile, ProfileRequest, 
-    model_yukle, veri_yukle, diyet_oner, hazir_profil_degerlerini_al
+    NutritionRequest, NutritionProfile, ProfileRequest, CalorieRequest,
+    model_yukle, veri_yukle, diyet_oner, hazir_profil_degerlerini_al,
+    daily_calorie_requirements, meal_distribution, calculate_macros, ideal_weight, calculate_bke
 )
 
 # Servisleri import edelim
