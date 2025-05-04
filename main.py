@@ -29,6 +29,11 @@ from models.user import User, UserCreate, UserResponse as UserResponseModel
 from models.dietitian import Dietitian, DietitianCreate, DietitianResponse
 from models.message import Message, MessageCreate, MessageResponse
 from models.post import PostDB, PostCommentDB, Post, PostComment, PostCreate, PostResponse
+# Diyet öneri modülünü import ediyoruz
+from models.nutrition_model import (
+    NutritionRequest, NutritionProfile, ProfileRequest, 
+    model_yukle, veri_yukle, diyet_oner, hazir_profil_degerlerini_al
+)
 
 # Servisleri import edelim
 from services.user_service import (
@@ -425,8 +430,7 @@ async def get_recipe_names(keyword: str = Form(...)):
 
 @app.post("/comments/")
 async def create_comment(
-    post_id: int,
-    content: str,
+    comment_data: dict = Body(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -436,7 +440,7 @@ async def create_comment(
         raise HTTPException(status_code=403, detail="Sadece kullanıcılar yorum ekleyebilir")
     
     try:
-        comment = add_comment(db, post_id, current_user.user_id, content)
+        comment = add_comment(db, comment_data["post_id"], current_user.user_id, comment_data["content"])
         return comment
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Yorum eklenirken bir hata oluştu: {str(e)}")
@@ -457,13 +461,13 @@ async def remove_comment(
 @app.put("/post/{post_id}")
 async def modify_post(
     post_id: int,
-    content: str,
+    content: dict = Body(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """Bir post'un içeriğini günceller"""
     try:
-        post = update_post(db, post_id, content)
+        post = update_post(db, post_id, content["content"])
         return post
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Post güncellenirken bir hata oluştu: {str(e)}")
@@ -531,7 +535,98 @@ async def predict_recipe_recommendations(request: RecipeRequest, db: Session = D
         return format_response(False, None, f"Tarif önerileri alınırken bir hata oluştu: {str(e)}")
 
 @app.post("/predict/nutrition/")
-async def predict_nutrition(data: dict, db: Session = Depends(get_db)):
+async def predict_nutrition(request: NutritionRequest):
+    """
+    Beslenme değerlerine göre yemek önerileri sunar.
+    
+    Parametreler:
+    - kalori: Hedef kalori miktarı
+    - yag: Yağ miktarı (gram)
+    - doymus_yag: Doymuş yağ miktarı (gram)
+    - kolesterol: Kolesterol miktarı (mg)
+    - sodyum: Sodyum miktarı (mg)
+    - karbonhidrat: Karbonhidrat miktarı (gram)
+    - lif: Lif miktarı (gram)
+    - seker: Şeker miktarı (gram)
+    - protein: Protein miktarı (gram)
+    - n_recommendations: Kaç öneri döndürüleceği (varsayılan 5)
+    """
+    try:
+        # Model ve veriyi yükle
+        model = model_yukle()
+        veri = veri_yukle()
+        
+        if model is None or veri is None:
+            return format_response(False, None, "Model veya veri yüklenemedi. Sunucu hatası.")
+        
+        # Girdi değerlerini al
+        girdi = [
+            request.kalori,
+            request.yag,
+            request.doymus_yag,
+            request.kolesterol,
+            request.sodyum,
+            request.karbonhidrat,
+            request.lif,
+            request.seker,
+            request.protein
+        ]
+        
+        # Diyet önerisi oluştur
+        oneriler = diyet_oner(model, veri, girdi, request.n_recommendations)
+        
+        if oneriler is None or len(oneriler) == 0:
+            return format_response(False, None, "Öneri oluşturulamadı.")
+        
+        # Yanıt formatını hazırla
+        sonuclar = []
+        for _, oneri in oneriler.iterrows():
+            # Malzemeleri düzenle
+            try:
+                malzemeler = str(oneri.get('RecipeIngredientParts', '')).strip('c()')
+                malzemeler = malzemeler.replace('"', '').split(', ')
+            except:
+                malzemeler = []
+                
+            # Tarif adımlarını düzenle
+            try:
+                tarifler = str(oneri.get('RecipeInstructions', '')).strip('c()')
+                tarifler = tarifler.replace('"', '').split(', ')
+            except:
+                tarifler = []
+                
+            sonuclar.append({
+                'name': oneri.get('Name', ''),
+                'calories': float(oneri.get('Calories', 0)),
+                'protein': float(oneri.get('ProteinContent', 0)),
+                'carbs': float(oneri.get('CarbohydrateContent', 0)),
+                'fat': float(oneri.get('FatContent', 0)),
+                'ingredients': malzemeler,
+                'instructions': tarifler
+            })
+            
+        return format_response(True, {
+            'recommendations': sonuclar,
+            'input': {
+                'kalori': request.kalori,
+                'yag': request.yag,
+                'protein': request.protein,
+                'karbonhidrat': request.karbonhidrat
+            }
+        }, "Diyet önerileri başarıyla oluşturuldu.")
+            
+    except Exception as e:
+        logger.error(f"Diyet önerisi endpoint hatası: {str(e)}")
+        logger.error(traceback.format_exc())
+        return format_response(False, None, f"Bir hata oluştu: {str(e)}")
+
+@app.post("/predict/simple-nutrition/")
+async def predict_simple_nutrition(data: dict, db: Session = Depends(get_db)):
+    """
+    Basit beslenme değerleri ile kalori tahmini yapar.
+    
+    Bu endpoint karbonhidrat, protein ve yağ değerlerine göre kalori tahmini yapar.
+    """
     try:
         # Model dosyasının yolu
         model_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'models', 'trained_model.pkl')
@@ -565,24 +660,192 @@ async def predict_nutrition(data: dict, db: Session = Depends(get_db)):
         print(f"Hata detayı: {error_detail}")
         return format_response(False, None, f"Tahmin yapılırken bir hata oluştu: {str(e)}")
 
-@app.post("/predict/ai-query/")
-async def ai_query(data: dict, db: Session = Depends(get_db)):
+@app.post("/predict/nutrition-profile/")
+async def predict_nutrition_profile(request: ProfileRequest):
+    """
+    Hazır beslenme profillerinden yemek önerileri sunar.
+    
+    Parametreler:
+    - profile: Beslenme profili (dusuk_kalorili, yuksek_proteinli, dusuk_karbonhidratli, vejetaryen)
+    - n_recommendations: Kaç öneri döndürüleceği (varsayılan 5)
+    """
     try:
-        query = data.get("query", "")
-        if not query:
-            return format_response(False, None, "Sorgu metni boş olamaz")
+        # Model ve veriyi yükle
+        model = model_yukle()
+        veri = veri_yukle()
+        
+        if model is None or veri is None:
+            return format_response(False, None, "Model veya veri yüklenemedi. Sunucu hatası.")
+        
+        # Profil değerlerini al
+        girdi = hazir_profil_degerlerini_al(request.profile)
+        
+        if girdi is None:
+            return format_response(False, None, "Geçersiz profil seçimi.")
+        
+        # Diyet önerisi oluştur
+        oneriler = diyet_oner(model, veri, girdi, request.n_recommendations)
+        
+        if oneriler is None or len(oneriler) == 0:
+            return format_response(False, None, "Öneri oluşturulamadı.")
+        
+        # Yanıt formatını hazırla
+        sonuclar = []
+        for _, oneri in oneriler.iterrows():
+            # Malzemeleri düzenle
+            try:
+                malzemeler = str(oneri.get('RecipeIngredientParts', '')).strip('c()')
+                malzemeler = malzemeler.replace('"', '').split(', ')
+            except:
+                malzemeler = []
+                
+            # Tarif adımlarını düzenle
+            try:
+                tarifler = str(oneri.get('RecipeInstructions', '')).strip('c()')
+                tarifler = tarifler.replace('"', '').split(', ')
+            except:
+                tarifler = []
+                
+            sonuclar.append({
+                'name': oneri.get('Name', ''),
+                'calories': float(oneri.get('Calories', 0)),
+                'protein': float(oneri.get('ProteinContent', 0)),
+                'carbs': float(oneri.get('CarbohydrateContent', 0)),
+                'fat': float(oneri.get('FatContent', 0)),
+                'ingredients': malzemeler,
+                'instructions': tarifler
+            })
             
-        # Bu kısımda kendi yapay zeka modelinize istek gönderecek kod olmalı
-        # Örnek olarak basit bir yanıt döndürüyoruz
-        response = f"Sorgunuz için öneriler: '{query}' için yapay zeka modeli yanıtı"
+        return format_response(True, {
+            'profile': request.profile,
+            'recommendations': sonuclar
+        }, "Diyet önerileri başarıyla oluşturuldu.")
+            
+    except Exception as e:
+        logger.error(f"Profil bazlı diyet önerisi endpoint hatası: {str(e)}")
+        logger.error(traceback.format_exc())
+        return format_response(False, None, f"Bir hata oluştu: {str(e)}")
+
+@app.post("/predict/user-nutrition/")
+async def predict_user_nutrition(
+    goal: str = Body("maintenance"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Kullanıcının bilgilerine göre kalori ihtiyacını ve öğün dağılımını hesaplar.
+    
+    Parametreler:
+    - goal: Hedef ("maintenance", "weight_loss" veya "muscle_building")
+    """
+    try:
+        # Kullanıcının kullanıcı tipi kontrolü
+        if not hasattr(current_user, 'user_id'):
+            return format_response(False, None, "Bu işlem için kullanıcı olarak giriş yapmalısınız")
+        
+        # Kullanıcı bilgilerini al
+        weight = current_user.weight
+        height = current_user.height
+        age = current_user.age
+        gender = current_user.gender
+        
+        # Gerekli alanların eksikliği kontrolü
+        if not all([weight, height, age, gender]):
+            missing_fields = []
+            if not weight: missing_fields.append("kilo")
+            if not height: missing_fields.append("boy")
+            if not age: missing_fields.append("yaş")
+            if not gender: missing_fields.append("cinsiyet")
+            
+            return format_response(False, None, f"Lütfen profil bilgilerinizi güncelleyin. Eksik bilgiler: {', '.join(missing_fields)}")
+        
+        # Aktivite seviyesi kontrolü
+        activity_level = getattr(current_user, 'activity_level', "sedentary")
+        if not activity_level:
+            activity_level = "sedentary"
+        
+        # Günlük kalori ihtiyacı hesaplama
+        total_calories, bke = daily_calorie_requirements(weight, height, age, gender, activity_level)
+        
+        # Hedef düzenleme (kilo verme ise %15 azalt, kas kazanma ise %10 arttır)
+        if goal == "weight_loss":
+            total_calories = total_calories * 0.85  # %15 azalt
+        elif goal == "muscle_building":
+            total_calories = total_calories * 1.10  # %10 arttır
+        
+        # Öğün dağılımı
+        meals = meal_distribution(total_calories)
+        
+        # Makro besin dağılımı
+        macros = calculate_macros(total_calories, weight, goal)
+        
+        # İdeal kilo
+        ideal = ideal_weight(height, gender)
         
         return format_response(True, {
-            "query": query,
-            "response": response
-        }, "AI sorgusu başarıyla işlendi.")
-    
+            "total_calories": round(total_calories, 2),
+            "bke": round(bke, 2),
+            "status": "Obez" if bke >= 30 else "Kilolu" if bke >= 25 else "Normal" if bke >= 18.5 else "Zayıf",
+            "ideal_weight": round(ideal, 2),
+            "weight_difference": round(weight - ideal, 2),
+            "meals": {k: round(v, 2) for k, v in meals.items()},
+            "macros": {
+                "protein": round(macros["protein_g"], 2),
+                "carbs": round(macros["carbs_g"], 2),
+                "fat": round(macros["fat_g"], 2)
+            }
+        }, "Kalori ihtiyacınız ve öğün dağılımınız başarıyla hesaplandı.")
+            
     except Exception as e:
-        return format_response(False, None, f"Yapay zeka sorgusu sırasında bir hata oluştu: {str(e)}")
+        logger.error(f"Kullanıcı beslenme analizi hatası: {str(e)}")
+        logger.error(traceback.format_exc())
+        return format_response(False, None, f"Bir hata oluştu: {str(e)}")
+
+@app.post("/predict/calorie-calculator/")
+async def calculate_calories(request: CalorieRequest):
+    """
+    Formdan gelen verilerle kalori ihtiyacı ve öğün dağılımını hesaplar.
+    
+    Parametreler:
+    - weight: Ağırlık (kg)
+    - height: Boy (cm)
+    - age: Yaş
+    - gender: Cinsiyet ("male" veya "female")
+    - activity_level: Aktivite seviyesi ("sedentary", "active", "very active")
+    """
+    try:
+        # Günlük kalori ihtiyacı hesaplama
+        total_calories, bke = daily_calorie_requirements(
+            request.weight, request.height, request.age, request.gender, request.activity_level
+        )
+        
+        # Öğün dağılımı
+        meals = meal_distribution(total_calories)
+        
+        # Makro besin dağılımı
+        macros = calculate_macros(total_calories, request.weight)
+        
+        # İdeal kilo
+        ideal = ideal_weight(request.height, request.gender)
+        
+        return format_response(True, {
+            "total_calories": round(total_calories, 2),
+            "bke": round(bke, 2),
+            "status": "Obez" if bke >= 30 else "Kilolu" if bke >= 25 else "Normal" if bke >= 18.5 else "Zayıf",
+            "ideal_weight": round(ideal, 2),
+            "weight_difference": round(request.weight - ideal, 2),
+            "meals": {k: round(v, 2) for k, v in meals.items()},
+            "macros": {
+                "protein": round(macros["protein_g"], 2),
+                "carbs": round(macros["carbs_g"], 2),
+                "fat": round(macros["fat_g"], 2)
+            }
+        }, "Kalori ihtiyacınız ve öğün dağılımınız başarıyla hesaplandı.")
+            
+    except Exception as e:
+        logger.error(f"Kalori hesaplama hatası: {str(e)}")
+        logger.error(traceback.format_exc())
+        return format_response(False, None, f"Bir hata oluştu: {str(e)}")
 
 # Randevu işlemleri
 @app.post("/appointments/")
