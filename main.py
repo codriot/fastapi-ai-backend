@@ -1,4 +1,4 @@
-from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Depends, Body, Header
+from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Depends, Body, Header, status
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
@@ -401,13 +401,20 @@ async def create_new_post(
     
     # Sadece normal kullanıcılar post oluşturabilir
     if not hasattr(current_user, 'user_id'):
-        raise HTTPException(status_code=403, detail="Sadece kullanıcılar post oluşturabilir")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sadece kullanıcılar post oluşturabilir")
     
     try:
         post = create_post(db, current_user.user_id, content, image)
         return post
+    except HTTPException as he:
+        # HTTPException türündeki hataları olduğu gibi yeniden fırlat
+        raise he
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Post oluşturulurken bir hata oluştu: {str(e)}")
+        # Diğer hataları 500 Internal Server Error olarak dönüştür
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Post oluşturulurken bir hata oluştu: {str(e)}"
+        )
 
 # Yüklenen resimleri sunucu üzerinden görüntüleyebilmek için
 @app.get("/uploads/{filename}")
@@ -438,13 +445,36 @@ async def create_comment(
     """Belirtilen post'a yorum ekler"""
     # Sadece normal kullanıcılar yorum ekleyebilir
     if not hasattr(current_user, 'user_id'):
-        raise HTTPException(status_code=403, detail="Sadece kullanıcılar yorum ekleyebilir")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Sadece kullanıcılar yorum ekleyebilir"
+        )
+    
+    # Gerekli alanların varlığını kontrol et
+    if "post_id" not in comment_data:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, 
+            detail="post_id alanı gereklidir"
+        )
+    
+    if "content" not in comment_data or not comment_data["content"].strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, 
+            detail="content alanı gereklidir ve boş olamaz"
+        )
     
     try:
         comment = add_comment(db, comment_data["post_id"], current_user.user_id, comment_data["content"])
-        return comment
+        return format_response(True, comment, "Yorum başarıyla eklendi")
+    except HTTPException as he:
+        # HTTPException türündeki hataları olduğu gibi yeniden fırlat
+        raise he
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Yorum eklenirken bir hata oluştu: {str(e)}")
+        logger.error(f"Yorum eklenirken hata: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Yorum eklenirken bir hata oluştu: {str(e)}"
+        )
 
 @app.delete("/comments/{comment_id}")
 async def remove_comment(
@@ -454,10 +484,33 @@ async def remove_comment(
 ):
     """Bir yorumu siler"""
     try:
+        # Yorumu getir
+        db_comment = db.query(PostCommentDB).filter(PostCommentDB.comment_id == comment_id).first()
+        if not db_comment:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Yorum bulunamadı"
+            )
+        
+        # Yetki kontrolü - sadece kendi yorumunu silebilir
+        if hasattr(current_user, 'user_id') and db_comment.user_id != current_user.user_id:
+            # Admin değilse
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Sadece kendi yorumunuzu silebilirsiniz"
+            )
+            
         result = delete_comment(db, comment_id)
-        return result
+        return format_response(True, result, "Yorum başarıyla silindi")
+    except HTTPException as he:
+        # HTTPException türündeki hataları olduğu gibi yeniden fırlat
+        raise he
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Yorum silinirken bir hata oluştu: {str(e)}")
+        logger.error(f"Yorum silinirken hata: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Yorum silinirken bir hata oluştu: {str(e)}"
+        )
 
 @app.put("/post/{post_id}")
 async def modify_post(
@@ -468,10 +521,40 @@ async def modify_post(
 ):
     """Bir post'un içeriğini günceller"""
     try:
+        # Post'u getir ve yetki kontrolü yap
+        db_post = db.query(PostDB).filter(PostDB.post_id == post_id).first()
+        if not db_post:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Gönderi bulunamadı"
+            )
+            
+        # Sadece gönderi sahibi düzenleyebilir
+        if hasattr(current_user, 'user_id') and db_post.user_id != current_user.user_id:
+            # Admin değilse
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Sadece kendi gönderinizi düzenleyebilirsiniz"
+            )
+        
+        # İçerik kontrolü
+        if "content" not in content or not content["content"].strip():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="content alanı gereklidir ve boş olamaz"
+            )
+            
         post = update_post(db, post_id, content["content"])
-        return post
+        return format_response(True, post, "Gönderi başarıyla güncellendi")
+    except HTTPException as he:
+        # HTTPException türündeki hataları olduğu gibi yeniden fırlat
+        raise he
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Post güncellenirken bir hata oluştu: {str(e)}")
+        logger.error(f"Post güncellenirken hata: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Gönderi güncellenirken bir hata oluştu: {str(e)}"
+        )
 
 @app.delete("/post/{post_id}")
 async def remove_post(
@@ -481,10 +564,33 @@ async def remove_post(
 ):
     """Bir post'u tamamen siler"""
     try:
+        # Post'u getir ve yetki kontrolü yap
+        db_post = db.query(PostDB).filter(PostDB.post_id == post_id).first()
+        if not db_post:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Gönderi bulunamadı"
+            )
+            
+        # Sadece gönderi sahibi silebilir
+        if hasattr(current_user, 'user_id') and db_post.user_id != current_user.user_id:
+            # Admin değilse
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Sadece kendi gönderinizi silebilirsiniz"
+            )
+            
         result = delete_post(db, post_id)
-        return result
+        return format_response(True, result, "Gönderi başarıyla silindi")
+    except HTTPException as he:
+        # HTTPException türündeki hataları olduğu gibi yeniden fırlat
+        raise he
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Post silinirken bir hata oluştu: {str(e)}")
+        logger.error(f"Post silinirken hata: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Gönderi silinirken bir hata oluştu: {str(e)}"
+        )
 
 # Yapay zeka endpointleri
 @app.post("/predict/diet-list/")

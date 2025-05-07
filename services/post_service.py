@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
 from models.post import PostDB, PostCommentDB, Post, PostComment
-from fastapi import HTTPException, UploadFile
+from fastapi import HTTPException, UploadFile, status
 import logging
 import os
 import shutil
@@ -31,12 +31,22 @@ def save_uploaded_file(upload_file: UploadFile, user_id: int, post_id: int) -> s
             shutil.copyfileobj(upload_file.file, buffer)
     except Exception as e:
         logging.error(f"Dosya kaydedilirken hata: {str(e)}")
-        raise HTTPException(status_code=500, detail="Dosya kaydedilemedi")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Dosya kaydedilemedi"
+        )
     
     return file_path
 
 def create_post(db: Session, user_id: int, content: str, image: Optional[UploadFile] = None):
     """Yeni bir gönderi oluşturur"""
+    # İçerik kontrolü
+    if not content or content.strip() == "":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, 
+            detail="Gönderi içeriği boş olamaz"
+        )
+    
     # Gönderi oluştur
     db_post = PostDB(
         user_id=user_id,
@@ -60,11 +70,20 @@ def create_post(db: Session, user_id: int, content: str, image: Optional[UploadF
     except Exception as e:
         db.rollback()
         logging.error(f"Gönderi oluşturulurken hata: {str(e)}")
-        raise
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Gönderi oluşturulurken bir hata oluştu: {str(e)}"
+        )
 
 def get_post(db: Session, post_id: int):
     """Gönderiyi ID ile getirir"""
-    return db.query(PostDB).filter(PostDB.post_id == post_id).first()
+    post = db.query(PostDB).filter(PostDB.post_id == post_id).first()
+    if not post:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Gönderi bulunamadı"
+        )
+    return post
 
 def get_posts(db: Session, skip: int = 0, limit: int = 100):
     """Tüm gönderileri getirir"""
@@ -72,13 +91,20 @@ def get_posts(db: Session, skip: int = 0, limit: int = 100):
 
 def get_user_posts(db: Session, user_id: int, skip: int = 0, limit: int = 100):
     """Belirli bir kullanıcının gönderilerini getirir"""
-    return db.query(PostDB).filter(PostDB.user_id == user_id).order_by(PostDB.timestamp.desc()).offset(skip).limit(limit).all()
+    posts = db.query(PostDB).filter(PostDB.user_id == user_id).order_by(PostDB.timestamp.desc()).offset(skip).limit(limit).all()
+    if not posts:
+        return []  # Boş liste dönüyoruz, hata fırlatmak yerine
+    return posts
 
 def update_post(db: Session, post_id: int, content: str):
     """Gönderi içeriğini günceller"""
-    db_post = get_post(db, post_id)
-    if not db_post:
-        raise HTTPException(status_code=404, detail="Gönderi bulunamadı")
+    if not content or content.strip() == "":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Gönderi içeriği boş olamaz"
+        )
+        
+    db_post = get_post(db, post_id)  # Burada get_post içinde 404 kontrolü yapılıyor
     
     db_post.content = content
     
@@ -89,13 +115,14 @@ def update_post(db: Session, post_id: int, content: str):
     except Exception as e:
         db.rollback()
         logging.error(f"Gönderi güncellenirken hata: {str(e)}")
-        raise
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Gönderi güncellenirken bir hata oluştu: {str(e)}"
+        )
 
 def delete_post(db: Session, post_id: int):
     """Gönderiyi siler"""
-    db_post = get_post(db, post_id)
-    if not db_post:
-        raise HTTPException(status_code=404, detail="Gönderi bulunamadı")
+    db_post = get_post(db, post_id)  # Burada get_post içinde 404 kontrolü yapılıyor
     
     try:
         # Önce, gönderi ile ilişkili resim varsa silinmeli
@@ -108,14 +135,22 @@ def delete_post(db: Session, post_id: int):
     except Exception as e:
         db.rollback()
         logging.error(f"Gönderi silinirken hata: {str(e)}")
-        raise
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Gönderi silinirken bir hata oluştu: {str(e)}"
+        )
 
 def add_comment(db: Session, post_id: int, user_id: int, content: str):
     """Gönderiye yorum ekler"""
+    # İçerik kontrolü
+    if not content or content.strip() == "":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Yorum içeriği boş olamaz"
+        )
+        
     # Gönderi kontrolü
-    db_post = get_post(db, post_id)
-    if not db_post:
-        raise HTTPException(status_code=404, detail="Gönderi bulunamadı")
+    db_post = get_post(db, post_id)  # Burada get_post içinde 404 kontrolü yapılıyor
     
     # Yorum oluştur
     db_comment = PostCommentDB(
@@ -133,17 +168,27 @@ def add_comment(db: Session, post_id: int, user_id: int, content: str):
     except Exception as e:
         db.rollback()
         logging.error(f"Yorum eklenirken hata: {str(e)}")
-        raise
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Yorum eklenirken bir hata oluştu: {str(e)}"
+        )
 
 def get_comments(db: Session, post_id: int, skip: int = 0, limit: int = 100):
     """Gönderinin yorumlarını getirir"""
-    return db.query(PostCommentDB).filter(PostCommentDB.post_id == post_id).order_by(PostCommentDB.timestamp.desc()).offset(skip).limit(limit).all()
+    # Önce gönderi var mı kontrol et
+    get_post(db, post_id)  # Burada get_post içinde 404 kontrolü yapılıyor
+    
+    comments = db.query(PostCommentDB).filter(PostCommentDB.post_id == post_id).order_by(PostCommentDB.timestamp.desc()).offset(skip).limit(limit).all()
+    return comments
 
 def delete_comment(db: Session, comment_id: int):
     """Yorumu siler"""
     db_comment = db.query(PostCommentDB).filter(PostCommentDB.comment_id == comment_id).first()
     if not db_comment:
-        raise HTTPException(status_code=404, detail="Yorum bulunamadı")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Yorum bulunamadı"
+        )
     
     try:
         db.delete(db_comment)
@@ -152,4 +197,7 @@ def delete_comment(db: Session, comment_id: int):
     except Exception as e:
         db.rollback()
         logging.error(f"Yorum silinirken hata: {str(e)}")
-        raise
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Yorum silinirken bir hata oluştu: {str(e)}"
+        )
