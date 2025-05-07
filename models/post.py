@@ -76,7 +76,7 @@ class PostResponse(PostBase):
     comments_count: int = 0
     
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 class PostCommentBase(BaseModel):
     post_id: str
@@ -97,4 +97,4 @@ class PostCommentResponse(PostCommentBase):
     likes: int = 0
     
     class Config:
-        orm_mode = True
+        from_attributes = True

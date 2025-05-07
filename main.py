@@ -131,7 +131,7 @@ class UserResponse(BaseModel):
     role: str = "user"
     
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 # Token yardımcı fonksiyonları
 def create_access_token(data: dict, expires_delta: timedelta = None):

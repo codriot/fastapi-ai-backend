@@ -76,7 +76,7 @@ class FoodResponse(FoodBase):
     food_id: int
     
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 class AIModelOutputBase(BaseModel):
     user_id: int
@@ -94,7 +94,7 @@ class AIModelOutputResponse(AIModelOutputBase):
     created_at: datetime
     
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 class ProgressTrackingBase(BaseModel):
     user_id: int
@@ -109,7 +109,7 @@ class ProgressTrackingResponse(ProgressTrackingBase):
     logged_at: datetime
     
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 class AppointmentBase(BaseModel):
     user_id: int
@@ -124,4 +124,4 @@ class AppointmentResponse(AppointmentBase):
     appointment_id: int
     
     class Config:
-        orm_mode = True
+        from_attributes = True
