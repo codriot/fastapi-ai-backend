@@ -10,7 +10,7 @@ from app.services.user_service import authenticate_user
 from app.services.dietitian_service import authenticate_dietitian
 from app.schemas.token import Token
 
-router = APIRouter()
+router = APIRouter(tags=["Kimlik Doğrulama"])
 
 @router.post("/token", response_model=Token)
 async def login_for_access_token(

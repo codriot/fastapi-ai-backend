@@ -4,6 +4,8 @@ import os
 from fastapi import UploadFile
 import uuid
 from app.core.config import settings
+import aiofiles
+import asyncio
 
 # .env dosyasını yükle
 load_dotenv()
@@ -37,19 +39,33 @@ class BackblazeUploader:
             file_extension = file.filename.split('.')[-1]
             unique_filename = f"{uuid.uuid4()}.{file_extension}"
             
+            # Geçici dosya oluştur
+            temp_file = f"temp_{unique_filename}"
+            
+            # Dosyayı geçici olarak kaydet
+            async with aiofiles.open(temp_file, 'wb') as out_file:
+                content = await file.read()
+                await out_file.write(content)
+            
             # Dosyayı yükle
-            await self.client.upload_fileobj(
-                file.file,
+            self.client.upload_file(
+                temp_file,
                 self.bucket_name,
                 unique_filename,
                 ExtraArgs={'ACL': 'public-read'}
             )
+            
+            # Geçici dosyayı sil
+            os.remove(temp_file)
             
             # URL oluştur
             url = f"{settings.BACKBLAZE_ENDPOINT}/{self.bucket_name}/{unique_filename}"
             return url
             
         except Exception as e:
+            # Hata durumunda geçici dosyayı temizle
+            if os.path.exists(temp_file):
+                os.remove(temp_file)
             raise Exception(f"Dosya yükleme hatası: {str(e)}")
 
 # Singleton instance
