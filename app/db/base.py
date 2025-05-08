@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Veritabanı bağlantı URL'si
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://dietai:e9rP3eyC3cbPD6jUWNj9CfWR8PSDzzgS@dpg-d04jlgi4d50c73a8lgf0-a.frankfurt-postgres.render.com/dietapp_rt6g")
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 # SQLAlchemy engine oluştur
 engine = create_engine(DATABASE_URL)
