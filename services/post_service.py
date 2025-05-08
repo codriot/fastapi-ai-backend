@@ -38,42 +38,31 @@ def save_uploaded_file(upload_file: UploadFile, user_id: int, post_id: int) -> s
     
     return file_path
 
-def create_post(db: Session, user_id: int, content: str, image: Optional[UploadFile] = None):
-    """Yeni bir gönderi oluşturur"""
-    # İçerik kontrolü
-    if not content or content.strip() == "":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, 
-            detail="Gönderi içeriği boş olamaz"
-        )
+def create_post(db: Session, user_id: int, content: str, image_url: str = None) -> Post:
+    """
+    Yeni bir post oluşturur
     
-    # Gönderi oluştur
+    Args:
+        db (Session): Veritabanı oturumu
+        user_id (int): Kullanıcı ID'si
+        content (str): Post içeriği
+        image_url (str, optional): Backblaze B2'deki resim URL'i
+        
+    Returns:
+        Post: Oluşturulan post
+    """
     db_post = PostDB(
         user_id=user_id,
         content=content,
-        timestamp=datetime.now()
+        image_url=image_url,
+        created_at=datetime.utcnow()
     )
     
-    try:
-        db.add(db_post)
-        db.commit()
-        db.refresh(db_post)
-        
-        # Eğer resim varsa kaydet ve bağlantıyı güncelle
-        if image:
-            file_path = save_uploaded_file(image, user_id, db_post.post_id)
-            db_post.image_url = file_path
-            db.commit()
-            db.refresh(db_post)
-        
-        return db_post
-    except Exception as e:
-        db.rollback()
-        logging.error(f"Gönderi oluşturulurken hata: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Gönderi oluşturulurken bir hata oluştu: {str(e)}"
-        )
+    db.add(db_post)
+    db.commit()
+    db.refresh(db_post)
+    
+    return Post.from_orm(db_post)
 
 def get_post(db: Session, post_id: int):
     """Gönderiyi ID ile getirir"""
