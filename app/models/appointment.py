@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Enum
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Enum as SQLEnum
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from pydantic import BaseModel, ConfigDict
@@ -14,17 +14,17 @@ class AppointmentStatus(str, enum.Enum):
 class Appointment(Base):
     __tablename__ = "appointments"
 
-    appointment_id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.user_id", ondelete="CASCADE"))
-    dietitian_id = Column(Integer, ForeignKey("dietitians.dietitian_id", ondelete="CASCADE"))
-    appointment_date = Column(DateTime, nullable=False)
-    status = Column(Enum(AppointmentStatus), default=AppointmentStatus.PENDING)
-    notes = Column(String(500))
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.user_id"))
+    dietitian_id = Column(Integer, ForeignKey("users.user_id"))
+    appointment_date = Column(DateTime)
+    status = Column(SQLEnum(AppointmentStatus), default=AppointmentStatus.PENDING)
+    notes = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.now)
 
     # İlişkiler
-    user = relationship("User", back_populates="appointments")
-    dietitian = relationship("Dietitian", back_populates="appointments")
+    user = relationship("User", back_populates="appointments", foreign_keys=[user_id])
+    dietitian = relationship("User", foreign_keys=[dietitian_id])
 
 class AppointmentBase(BaseModel):
     appointment_date: datetime
