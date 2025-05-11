@@ -1,6 +1,5 @@
 from sqlalchemy.orm import Session
 from app.models.user import User, UserCreate
-from app.models.dietitian  import Dietitian
 from passlib.context import CryptContext
 from typing import List, Optional
 from fastapi import HTTPException
