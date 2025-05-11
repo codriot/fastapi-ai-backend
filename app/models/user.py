@@ -5,10 +5,11 @@ from enum import Enum
 from sqlalchemy import Column, Integer, String, Float, DateTime, Enum as SQLEnum
 from sqlalchemy.orm import relationship
 from app.db.base import Base
+import enum
 
-class Role(str, Enum):
+class UserRole(str, enum.Enum):
     USER = "user"
-    DIETITIAN = "dietitian" 
+    DIETITIAN = "dietitian"
     ADMIN = "admin"
 
 class UserBase(BaseModel):
@@ -16,7 +17,7 @@ class UserBase(BaseModel):
     
     email: str
     name: str
-    role: Role
+    role: UserRole
 
 class UserCreate(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -24,7 +25,7 @@ class UserCreate(BaseModel):
     email: str
     password: str
     name: str
-    role: Role
+    role: UserRole
     # User rolü için
     age: Optional[int] = None
     weight: Optional[float] = None
@@ -84,17 +85,12 @@ class User(Base):
     __tablename__ = "users"
 
     user_id = Column(Integer, primary_key=True, index=True)
-    name = Column(String(100), nullable=False)
     email = Column(String(150), unique=True, index=True, nullable=False)
     password = Column(String(255), nullable=False)
-    age = Column(Integer)
-    gender = Column(SQLEnum(Gender))
-    height = Column(Float)
-    weight = Column(Float)
-    goal = Column(SQLEnum(Goal))
-    activity_level = Column(SQLEnum(ActivityLevel))
-    auth_provider = Column(String(50), default="email")
-    provider_id = Column(String(255), nullable=True)
+    name = Column(String(100), nullable=False)
+    role = Column(SQLEnum(UserRole), default=UserRole.USER)
+    experience_years = Column(Integer, nullable=True)  # Diyetisyenler için
+    specialization = Column(String(100), nullable=True)  # Diyetisyenler için
     created_at = Column(DateTime, default=datetime.now)
 
     # İlişkiler
