@@ -4,7 +4,7 @@ from typing import Optional, List, Dict, Any
 from enum import Enum
 from sqlalchemy import Column, Integer, String, Float, DateTime, Enum as SQLEnum
 from sqlalchemy.orm import relationship
-from app.database import Base
+from app.db.base import Base
 
 class Role(str, Enum):
     USER = "user"

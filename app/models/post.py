@@ -4,7 +4,7 @@ from typing import List, Optional
 from datetime import datetime
 from sqlalchemy import Column, Integer, String, DateTime, Text, ForeignKey, Table, ARRAY
 from sqlalchemy.orm import relationship
-from app.database import Base
+from app.db.base import Base
 
 app = FastAPI()
 

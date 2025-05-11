@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List
-from app.database import get_db
+from app.db.base import get_db
 from app.models.appointment import Appointment, AppointmentCreate, AppointmentResponse
 from app.services.appointment_service import (
     create_appointment,

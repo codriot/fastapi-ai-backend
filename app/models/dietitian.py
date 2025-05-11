@@ -3,7 +3,7 @@ from sqlalchemy.orm import relationship
 from datetime import datetime
 from pydantic import BaseModel, ConfigDict
 from typing import Any, Dict, Optional
-from app.database import Base
+from app.db.base import Base
 
 class Dietitian(Base):
     __tablename__ = "dietitians"

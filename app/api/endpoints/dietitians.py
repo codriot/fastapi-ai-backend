@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List
-from app.database import get_db
+from app.db.base import get_db
 from app.models.dietitian import Dietitian, DietitianCreate, DietitianResponse
 from app.services.dietitian_service import (
     create_dietitian,

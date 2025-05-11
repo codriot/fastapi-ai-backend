@@ -2,7 +2,7 @@ from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Enum
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from pydantic import BaseModel, ConfigDict
-from app.database import Base
+from app.db.base import Base
 import enum
 
 class AppointmentStatus(str, enum.Enum):
