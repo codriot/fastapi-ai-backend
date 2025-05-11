@@ -100,6 +100,8 @@ class User(Base):
     progress_records = relationship("ProgressTracking", back_populates="user")
     sent_messages = relationship("Message", back_populates="sender", foreign_keys="[Message.sender_id]")
     received_messages = relationship("Message", back_populates="receiver", foreign_keys="[Message.receiver_id]")
+    nutrition_plans = relationship("Nutrition", back_populates="user", foreign_keys="[Nutrition.user_id]")
+    dietitian_nutrition_plans = relationship("Nutrition", back_populates="dietitian", foreign_keys="[Nutrition.dietitian_id]")
 
 # Özel kayıt modeli
 class RegisterUser(BaseModel):

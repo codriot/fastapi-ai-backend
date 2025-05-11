@@ -9,7 +9,7 @@ class Nutrition(Base):
 
     nutrition_id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.user_id", ondelete="CASCADE"))
-    dietitian_id = Column(Integer, ForeignKey("dietitians.dietitian_id", ondelete="CASCADE"))
+    dietitian_id = Column(Integer, ForeignKey("users.user_id", ondelete="CASCADE"))
     title = Column(String(100), nullable=False)
     description = Column(String(500))
     calories = Column(Float)
@@ -19,8 +19,8 @@ class Nutrition(Base):
     created_at = Column(DateTime, default=datetime.now)
 
     # İlişkiler
-    user = relationship("User", back_populates="nutrition_plans")
-    dietitian = relationship("Dietitian", back_populates="nutrition_plans")
+    user = relationship("User", back_populates="nutrition_plans", foreign_keys=[user_id])
+    dietitian = relationship("User", back_populates="dietitian_nutrition_plans", foreign_keys=[dietitian_id])
 
 class NutritionBase(BaseModel):
     title: str
