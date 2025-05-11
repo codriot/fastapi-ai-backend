@@ -98,10 +98,12 @@ class User(Base):
     created_at = Column(DateTime, default=datetime.now)
 
     # İlişkiler
-    appointments = relationship("Appointment", back_populates="user")
+    user_appointments = relationship("Appointment", back_populates="user", foreign_keys="[Appointment.user_id]")
+    dietitian_appointments = relationship("Appointment", back_populates="dietitian", foreign_keys="[Appointment.dietitian_id]")
     ai_outputs = relationship("AIModelOutput", back_populates="user")
     progress_records = relationship("ProgressTracking", back_populates="user")
-    sent_messages = relationship("Message", foreign_keys="Message.sender_id", back_populates="sender")
+    sent_messages = relationship("Message", back_populates="sender", foreign_keys="[Message.sender_id]")
+    received_messages = relationship("Message", back_populates="receiver", foreign_keys="[Message.receiver_id]")
 
 # Özel kayıt modeli
 class RegisterUser(BaseModel):
