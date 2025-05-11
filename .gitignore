@@ -4,7 +4,6 @@
 /__pycache__
 models/trained_model.pkl
 data/
-models/__pycache__
-services/__pycache__
-uploads/
+app/models/__pycache__
+app/services/__pycache__
 .env

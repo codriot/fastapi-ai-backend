@@ -1,10 +1,10 @@
 from datetime import datetime
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing import Optional, List, Dict, Any
 from enum import Enum
-from sqlalchemy import Column, Integer, String, Float, DateTime
+from sqlalchemy import Column, Integer, String, Float, DateTime, Enum as SQLEnum
 from sqlalchemy.orm import relationship
-from database import Base
+from app.database import Base
 
 class Role(str, Enum):
     USER = "user"
@@ -12,11 +12,15 @@ class Role(str, Enum):
     ADMIN = "admin"
 
 class UserBase(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    
     email: str
     name: str
     role: Role
 
 class UserCreate(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    
     email: str
     password: str
     name: str
@@ -36,10 +40,14 @@ class UserCreate(BaseModel):
     dietitian_id: Optional[str] = None
 
 class UserResponse(UserBase):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    
     uid: str
     created_at: datetime
 
 class UserDetails(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    
     uid: str
     age: int
     weight: float
@@ -48,36 +56,57 @@ class UserDetails(BaseModel):
     activity_level: str
 
 class DietitianDetails(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    
     uid: str
     experience: str
     specialization: str
+
+class Gender(str, Enum):
+    MALE = "male"
+    FEMALE = "female"
+    OTHER = "other"
+
+class Goal(str, Enum):
+    WEIGHT_LOSS = "weight_loss"
+    WEIGHT_GAIN = "weight_gain"
+    MAINTENANCE = "maintenance"
+    MUSCLE_GAIN = "muscle_gain"
+
+class ActivityLevel(str, Enum):
+    SEDENTARY = "sedentary"
+    LIGHT = "light"
+    MODERATE = "moderate"
+    ACTIVE = "active"
+    VERY_ACTIVE = "very_active"
 
 class User(Base):
     __tablename__ = "users"
 
     user_id = Column(Integer, primary_key=True, index=True)
     name = Column(String(100), nullable=False)
-    email = Column(String(150), unique=True, index=True)
-    password = Column(String(255))
+    email = Column(String(150), unique=True, index=True, nullable=False)
+    password = Column(String(255), nullable=False)
     age = Column(Integer)
-    gender = Column(String(10))
+    gender = Column(SQLEnum(Gender))
     height = Column(Float)
     weight = Column(Float)
-    goal = Column(String(100))
-    activity_level = Column(String(20))
+    goal = Column(SQLEnum(Goal))
+    activity_level = Column(SQLEnum(ActivityLevel))
+    auth_provider = Column(String(50), default="email")
+    provider_id = Column(String(255), nullable=True)
     created_at = Column(DateTime, default=datetime.now)
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
-    auth_provider = Column(String(50), default="email", nullable=False) 
-    provider_id = Column(String(255))
 
-    # İlişkiler - Basit sınıf adları kullanarak
+    # İlişkiler
     appointments = relationship("Appointment", back_populates="user")
     ai_outputs = relationship("AIModelOutput", back_populates="user")
     progress_records = relationship("ProgressTracking", back_populates="user")
     sent_messages = relationship("Message", foreign_keys="Message.sender_id", back_populates="sender")
 
-# Özel kayıt modeli (firebase ile uyumlu)
+# Özel kayıt modeli
 class RegisterUser(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    
     email: str
     password: str
     name: str

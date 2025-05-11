@@ -1,8 +1,8 @@
 from sqlalchemy.orm import Session
-from models.user import User
-from models.dietitian import Dietitian
+from app.models.user import User, UserCreate
+from app.models.dietitian  import Dietitian
 from passlib.context import CryptContext
-from typing import Optional
+from typing import List, Optional
 from fastapi import HTTPException
 from datetime import datetime
 import logging
@@ -10,40 +10,48 @@ import logging
 # Şifre işlemleri için
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-def get_password_hash(password):
+def get_password_hash(password: str) -> str:
     """Şifreyi hash'ler"""
     return pwd_context.hash(password)
 
-def verify_password(plain_password, hashed_password):
+def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Şifrenin doğruluğunu kontrol eder"""
     return pwd_context.verify(plain_password, hashed_password)
+
+def get_user(db: Session, user_id: int):
+    """Kullanıcıyı ID ile getirir"""
+    return db.query(User).filter(User.user_id == user_id).first()
 
 def get_user_by_email(db: Session, email: str):
     """Kullanıcıyı email ile getirir"""
     return db.query(User).filter(User.email == email).first()
 
-def get_user_by_id(db: Session, user_id: int):
-    """Kullanıcıyı ID ile getirir"""
-    return db.query(User).filter(User.user_id == user_id).first()
+def get_users(db: Session, skip: int = 0, limit: int = 100):
+    """Tüm kullanıcıları listeler"""
+    return db.query(User).offset(skip).limit(limit).all()
 
-def create_user(db: Session, user_data: dict):
+def create_user(db: Session, user: UserCreate):
     """Yeni kullanıcı oluşturur"""
+    # Email kontrolü
+    db_user = get_user_by_email(db, email=user.email)
+    if db_user:
+        raise HTTPException(status_code=400, detail="Email zaten kayıtlı")
+    
     # Şifreyi hash'le
-    hashed_password = get_password_hash(user_data.get("password"))
+    hashed_password = get_password_hash(user.password)
     
     # Kullanıcı oluştur
     db_user = User(
-        name=user_data.get("name"),
-        email=user_data.get("email"),
+        email=user.email,
+        name=user.name,
         password=hashed_password,
-        age=user_data.get("age"),
-        gender=user_data.get("gender"),
-        height=user_data.get("height"),
-        weight=user_data.get("weight"),
-        goal=user_data.get("goal"),
-        activity_level=user_data.get("activity_level"),
-        auth_provider=user_data.get("auth_provider", "email"),
-        provider_id=user_data.get("provider_id")
+        role=user.role,
+        age=user.age,
+        weight=user.weight,
+        height=user.height,
+        goal=user.goal,
+        activity_level=user.activity_level,
+        gender=user.gender
     )
     
     try:
@@ -56,43 +64,35 @@ def create_user(db: Session, user_data: dict):
         logging.error(f"Kullanıcı oluşturulurken hata: {str(e)}")
         raise
 
-def update_user(db: Session, user_id: int, user_data: dict):
-    """Belirtilen kullanıcının bilgilerini günceller"""
-    db_user = get_user_by_id(db, user_id)
+def update_user(db: Session, user_id: int, user: UserCreate):
+    """Kullanıcı bilgilerini günceller"""
+    db_user = get_user(db, user_id)
     if not db_user:
         return None
     
     # Şifre güncellemesi varsa hashleyelim
-    if 'password' in user_data and user_data['password']:
-        user_data['hashed_password'] = get_password_hash(user_data['password'])
-        del user_data['password']  # Ham şifreyi sil
+    if user.password:
+        user.password = get_password_hash(user.password)
     
     # Sadece gönderilen alanları güncelle
-    for key, value in user_data.items():
+    for key, value in user.dict(exclude_unset=True).items():
         if hasattr(db_user, key):
             setattr(db_user, key, value)
     
     try:
         db.commit()
         db.refresh(db_user)
-        
-        # SQLAlchemy nesnesini JSON'a çevrilebilir bir sözlüğe dönüştür
-        user_dict = {}
-        for key, value in db_user.__dict__.items():
-            # SQLAlchemy'nin iç değişkenlerini atlama (_sa_ ile başlayanlar)
-            if not key.startswith('_'):
-                user_dict[key] = value
-                
-        return user_dict
+        return db_user
     except Exception as e:
         db.rollback()
-        raise Exception(f"Kullanıcı güncellenirken bir hata oluştu: {str(e)}")
+        logging.error(f"Kullanıcı güncellenirken hata: {str(e)}")
+        raise
 
 def delete_user(db: Session, user_id: int):
     """Kullanıcıyı siler"""
-    db_user = get_user_by_id(db, user_id)
+    db_user = get_user(db, user_id)
     if not db_user:
-        raise HTTPException(status_code=404, detail="Kullanıcı bulunamadı")
+        return None
     
     try:
         db.delete(db_user)
@@ -105,11 +105,9 @@ def delete_user(db: Session, user_id: int):
 
 def authenticate_user(db: Session, email: str, password: str):
     """Kullanıcı giriş doğrulaması yapar"""
-    db_user = get_user_by_email(db, email)
-    if not db_user:
+    user = db.query(User).filter(User.email == email).first()
+    if not user:
         return False
-    
-    if not verify_password(password, db_user.password):
+    if not verify_password(password, user.password):
         return False
-    
-    return db_user
+    return user

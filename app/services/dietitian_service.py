@@ -1,7 +1,7 @@
 from sqlalchemy.orm import Session
-from app.models.dietitian  import Dietitian
+from app.models.dietitian import Dietitian
 from passlib.context import CryptContext
-from typing import Optional
+from typing import List, Optional
 from fastapi import HTTPException
 from datetime import datetime
 import logging
@@ -9,24 +9,33 @@ import logging
 # Şifre işlemleri için
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-def get_password_hash(password):
+def get_password_hash(password: str) -> str:
     """Şifreyi hash'ler"""
     return pwd_context.hash(password)
 
-def verify_password(plain_password, hashed_password):
+def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Şifrenin doğruluğunu kontrol eder"""
     return pwd_context.verify(plain_password, hashed_password)
+
+def get_dietitian(db: Session, dietitian_id: int):
+    """Diyetisyeni ID ile getirir"""
+    return db.query(Dietitian).filter(Dietitian.dietitian_id == dietitian_id).first()
 
 def get_dietitian_by_email(db: Session, email: str):
     """Diyetisyeni email ile getirir"""
     return db.query(Dietitian).filter(Dietitian.email == email).first()
 
-def get_dietitian_by_id(db: Session, dietitian_id: int):
-    """Diyetisyeni ID ile getirir"""
-    return db.query(Dietitian).filter(Dietitian.dietitian_id == dietitian_id).first()
+def get_dietitians(db: Session, skip: int = 0, limit: int = 100):
+    """Tüm diyetisyenleri listeler"""
+    return db.query(Dietitian).offset(skip).limit(limit).all()
 
 def create_dietitian(db: Session, dietitian_data: dict):
     """Yeni diyetisyen oluşturur"""
+    # Email kontrolü
+    db_dietitian = get_dietitian_by_email(db, email=dietitian_data.get("email"))
+    if db_dietitian:
+        raise HTTPException(status_code=400, detail="Email zaten kayıtlı")
+    
     # Şifreyi hash'le
     hashed_password = get_password_hash(dietitian_data.get("password"))
     
@@ -50,15 +59,14 @@ def create_dietitian(db: Session, dietitian_data: dict):
         raise
 
 def update_dietitian(db: Session, dietitian_id: int, dietitian_data: dict):
-    """Belirtilen diyetisyenin bilgilerini günceller"""
-    db_dietitian = get_dietitian_by_id(db, dietitian_id)
+    """Diyetisyen bilgilerini günceller"""
+    db_dietitian = get_dietitian(db, dietitian_id)
     if not db_dietitian:
         return None
     
     # Şifre güncellemesi varsa hashleyelim
     if 'password' in dietitian_data and dietitian_data['password']:
-        dietitian_data['hashed_password'] = get_password_hash(dietitian_data['password'])
-        del dietitian_data['password']  # Ham şifreyi sil
+        dietitian_data['password'] = get_password_hash(dietitian_data['password'])
     
     # Sadece gönderilen alanları güncelle
     for key, value in dietitian_data.items():
@@ -68,23 +76,17 @@ def update_dietitian(db: Session, dietitian_id: int, dietitian_data: dict):
     try:
         db.commit()
         db.refresh(db_dietitian)
-        
-        # SQLAlchemy nesnesini JSON'a çevrilebilir bir sözlüğe dönüştür
-        dietitian_dict = {}
-        for key, value in db_dietitian.__dict__.items():
-            if not key.startswith('_'):  # SQLAlchemy iç değişkenlerini atlama
-                dietitian_dict[key] = value
-                
-        return dietitian_dict
+        return db_dietitian
     except Exception as e:
         db.rollback()
-        raise Exception(f"Diyetisyen güncellenirken bir hata oluştu: {str(e)}")
+        logging.error(f"Diyetisyen güncellenirken hata: {str(e)}")
+        raise
 
 def delete_dietitian(db: Session, dietitian_id: int):
-    """Diyetisyen siler"""
-    db_dietitian = get_dietitian_by_id(db, dietitian_id)
+    """Diyetisyeni siler"""
+    db_dietitian = get_dietitian(db, dietitian_id)
     if not db_dietitian:
-        raise HTTPException(status_code=404, detail="Diyetisyen bulunamadı")
+        return None
     
     try:
         db.delete(db_dietitian)
@@ -97,11 +99,9 @@ def delete_dietitian(db: Session, dietitian_id: int):
 
 def authenticate_dietitian(db: Session, email: str, password: str):
     """Diyetisyen giriş doğrulaması yapar"""
-    db_dietitian = get_dietitian_by_email(db, email)
-    if not db_dietitian:
+    dietitian = get_dietitian_by_email(db, email)
+    if not dietitian:
         return False
-    
-    if not verify_password(password, db_dietitian.password):
+    if not verify_password(password, dietitian.password):
         return False
-    
-    return db_dietitian
+    return dietitian 

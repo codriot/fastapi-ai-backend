@@ -1,5 +1,5 @@
 from sqlalchemy.orm import Session
-from models.post import PostDB, PostCommentDB, Post, PostComment
+from app.models.post import PostDB, PostCommentDB, Post, PostComment
 from fastapi import HTTPException, UploadFile, status
 import logging
 import os

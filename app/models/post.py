@@ -1,10 +1,10 @@
 from fastapi import FastAPI
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing import List, Optional
 from datetime import datetime
 from sqlalchemy import Column, Integer, String, DateTime, Text, ForeignKey, Table, ARRAY
 from sqlalchemy.orm import relationship
-from database import Base
+from app.database import Base
 
 app = FastAPI()
 

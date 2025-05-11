@@ -155,9 +155,9 @@ def model_yukle(model_yolu=None):
         # Alternatif yolları da dene
         if not os.path.exists(model_yolu):
             alternative_paths = [
-                '/opt/render/project/src/models/trained_model.pkl',
-                '/app/models/trained_model.pkl',
-                './models/trained_model.pkl'
+                '/opt/render/project/src/app/models/trained_model.pkl',
+                '/app/app/models/trained_model.pkl',
+                './app/models/trained_model.pkl'
             ]
             
             for alt_path in alternative_paths:
