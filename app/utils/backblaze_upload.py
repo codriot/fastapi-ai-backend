@@ -6,6 +6,9 @@ import uuid
 from app.core.config import settings
 import aiofiles
 import asyncio
+from botocore.config import Config
+import botocore.session
+from boto3.session import Session
 
 # .env dosyasını yükle
 load_dotenv()
@@ -15,13 +18,36 @@ class BackblazeUploader:
         """
         Backblaze B2 yükleyici sınıfını başlatır
         """
-        # Backblaze B2 bağlantı bilgileri
-        self.client = boto3.client(
+        # Özel bir botocore session oluştur ve yapılandır
+        session = botocore.session.get_session()
+        
+        # Backblaze B2 bağlantı bilgileri ile boto3 session oluştur
+        boto3_session = Session(
+            aws_access_key_id=settings.BACKBLAZE_KEY_ID,
+            aws_secret_access_key=settings.BACKBLAZE_APPLICATION_KEY,
+            botocore_session=session
+        )
+          # Backblaze B2 ile uyumlu istemciyi oluştur
+        self.client = boto3_session.client(
             's3',
             endpoint_url=settings.BACKBLAZE_ENDPOINT,
-            aws_access_key_id=settings.BACKBLAZE_KEY_ID,
-            aws_secret_access_key=settings.BACKBLAZE_APPLICATION_KEY
+            config=Config(
+                s3={
+                    'addressing_style': 'path',
+                    'payload_signing_enabled': False,
+                    'use_accelerate_endpoint': False,
+                    # B2 problem çözümü: checksum algoritma başlığını devre dışı bırak
+                    'checksum_algorithms_enabled': False
+                },
+                signature_version='s3v4'
+            )
         )
+        
+        # Ekstra argümanlar
+        self.extra_args = {
+            'ACL': 'public-read'
+        }
+        
         self.bucket_name = settings.BACKBLAZE_BUCKET_NAME
     
     async def upload_file(self, file: UploadFile) -> str:
@@ -34,6 +60,7 @@ class BackblazeUploader:
         Returns:
             str: Yüklenen dosyanın URL'i
         """
+        temp_file = None
         try:
             # Benzersiz dosya adı oluştur
             file_extension = file.filename.split('.')[-1]
@@ -47,16 +74,27 @@ class BackblazeUploader:
                 content = await file.read()
                 await out_file.write(content)
             
-            # Dosyayı yükle
+            # Upload öncesi ekstra argümanları ayarla
+            upload_args = dict(self.extra_args)
+            
+            # Content-Type ekle
+            if file.content_type:
+                upload_args['ContentType'] = file.content_type
+            else:
+                upload_args['ContentType'] = 'application/octet-stream'
+              # Dosyayı doğrudan upload_file ile yükle (put_object yerine)
+            # SDK Checksum'ı devre dışı bırakmak için parametreleri ayarla
             self.client.upload_file(
-                temp_file,
-                self.bucket_name,
-                unique_filename,
-                ExtraArgs={'ACL': 'public-read'}
+                Filename=temp_file,
+                Bucket=self.bucket_name,
+                Key=unique_filename,
+                ExtraArgs={**upload_args, 'ChecksumAlgorithm': None}
             )
             
             # Geçici dosyayı sil
-            os.remove(temp_file)
+            if os.path.exists(temp_file):
+                os.remove(temp_file)
+                temp_file = None
             
             # URL oluştur
             url = f"{settings.BACKBLAZE_ENDPOINT}/{self.bucket_name}/{unique_filename}"
@@ -64,7 +102,7 @@ class BackblazeUploader:
             
         except Exception as e:
             # Hata durumunda geçici dosyayı temizle
-            if os.path.exists(temp_file):
+            if temp_file and os.path.exists(temp_file):
                 os.remove(temp_file)
             raise Exception(f"Dosya yükleme hatası: {str(e)}")
 

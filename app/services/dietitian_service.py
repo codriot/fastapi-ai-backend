@@ -1,5 +1,5 @@
 from sqlalchemy.orm import Session
-from app.models.user import User, UserRole
+from app.models.dietitian import Dietitian
 from passlib.context import CryptContext
 from typing import List, Optional
 from fastapi import HTTPException
@@ -19,23 +19,19 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 def get_dietitian(db: Session, dietitian_id: int):
     """Diyetisyeni ID ile getirir"""
-    return db.query(User).filter(
-        User.user_id == dietitian_id,
-        User.role == UserRole.DIETITIAN
+    return db.query(Dietitian).filter(
+        Dietitian.dietitian_id == dietitian_id
     ).first()
 
 def get_dietitian_by_email(db: Session, email: str):
     """Diyetisyeni email ile getirir"""
-    return db.query(User).filter(
-        User.email == email,
-        User.role == UserRole.DIETITIAN
+    return db.query(Dietitian).filter(
+        Dietitian.email == email
     ).first()
 
 def get_dietitians(db: Session, skip: int = 0, limit: int = 100):
     """Tüm diyetisyenleri listeler"""
-    return db.query(User).filter(
-        User.role == UserRole.DIETITIAN
-    ).offset(skip).limit(limit).all()
+    return db.query(Dietitian).offset(skip).limit(limit).all()
 
 def create_dietitian(db: Session, dietitian_data: dict):
     """Yeni diyetisyen oluşturur"""
@@ -44,15 +40,13 @@ def create_dietitian(db: Session, dietitian_data: dict):
     if db_dietitian:
         raise HTTPException(status_code=400, detail="Email zaten kayıtlı")
     
-    # Şifreyi hash'le
-    hashed_password = get_password_hash(dietitian_data.get("password"))
+    # Şifreyi doğrudan kullan (hashleme yapma)
     
     # Diyetisyen oluştur
-    db_dietitian = User(
+    db_dietitian = Dietitian(
         name=dietitian_data.get("name"),
         email=dietitian_data.get("email"),
-        password=hashed_password,
-        role=UserRole.DIETITIAN,
+        password=dietitian_data.get("password"),
         experience_years=dietitian_data.get("experience_years"),
         specialization=dietitian_data.get("specialization")
     )
@@ -73,9 +67,7 @@ def update_dietitian(db: Session, dietitian_id: int, dietitian_data: dict):
     if not db_dietitian:
         return None
     
-    # Şifre güncellemesi varsa hashleyelim
-    if 'password' in dietitian_data and dietitian_data['password']:
-        dietitian_data['password'] = get_password_hash(dietitian_data['password'])
+    # Şifre güncellemesi varsa direkt kullan (hashleme yapma)
     
     # Sadece gönderilen alanları güncelle
     for key, value in dietitian_data.items():
@@ -111,6 +103,7 @@ def authenticate_dietitian(db: Session, email: str, password: str):
     dietitian = get_dietitian_by_email(db, email)
     if not dietitian:
         return False
-    if not verify_password(password, dietitian.password):
+    # Şifreyi doğrudan karşılaştır
+    if dietitian.password != password:
         return False
     return dietitian 

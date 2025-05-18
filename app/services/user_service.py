@@ -36,21 +36,17 @@ def create_user(db: Session, user: UserCreate):
     if db_user:
         raise HTTPException(status_code=400, detail="Email zaten kayıtlı")
     
-    # Şifreyi hash'le
-    hashed_password = get_password_hash(user.password)
-    
-    # Kullanıcı oluştur
+    # Kullanıcı oluştur (şifre hashlenmeden)
     db_user = User(
-        email=user.email,
         name=user.name,
-        password=hashed_password,
-        role=user.role,
+        email=user.email,
+        password=user.password,
         age=user.age,
-        weight=user.weight,
+        gender=user.gender,
         height=user.height,
+        weight=user.weight,
         goal=user.goal,
-        activity_level=user.activity_level,
-        gender=user.gender
+        activity_level=user.activity_level
     )
     
     try:
@@ -69,12 +65,14 @@ def update_user(db: Session, user_id: int, user: UserCreate):
     if not db_user:
         return None
     
-    # Şifre güncellemesi varsa hashleyelim
-    if user.password:
-        user.password = get_password_hash(user.password)
+    # Sadece gönderilen alanları güncelle
+    update_data = user.model_dump(exclude_unset=True)
+    
+    # Güncelleme zamanını ayarla
+    update_data["updated_at"] = datetime.now()
     
     # Sadece gönderilen alanları güncelle
-    for key, value in user.dict(exclude_unset=True).items():
+    for key, value in update_data.items():
         if hasattr(db_user, key):
             setattr(db_user, key, value)
     
@@ -107,6 +105,7 @@ def authenticate_user(db: Session, email: str, password: str):
     user = db.query(User).filter(User.email == email).first()
     if not user:
         return False
-    if not verify_password(password, user.password):
+    # Şifreyi doğrudan karşılaştır
+    if user.password != password:
         return False
     return user

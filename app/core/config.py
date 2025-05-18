@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     DEBUG: bool = True
     
     # Veritabanı ayarları
-    DATABASE_URL: str = os.getenv("DATABASE_URL")
+    DATABASE_URL: str 
     
     # JWT ayarları
     SECRET_KEY: str = os.getenv("SECRET_KEY", "dietapp-JWT-secretkey-2025-04-23-v1")
