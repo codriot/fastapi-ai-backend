@@ -3,7 +3,6 @@
 /venv
 /__pycache__
 models/trained_model.pkl
-data/
 app/models/__pycache__
 app/services/__pycache__
 .env
