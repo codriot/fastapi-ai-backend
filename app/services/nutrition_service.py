@@ -57,4 +57,17 @@ def delete_nutrition(db: Session, nutrition_id: int):
     except Exception as e:
         db.rollback()
         logging.error(f"Beslenme planı silinirken hata: {str(e)}")
-        raise 
+        raise
+
+# Beslenme planı sayma fonksiyonu
+def count_nutritions(db: Session):
+    """Toplam beslenme planı sayısını döner"""
+    return db.query(Nutrition).count()
+
+def get_user_nutritions(db: Session, user_id: int, skip: int = 0, limit: int = 100):
+    """Kullanıcının beslenme planlarını getirir"""
+    return db.query(Nutrition).filter(Nutrition.user_id == user_id).offset(skip).limit(limit).all()
+
+def count_user_nutritions(db: Session, user_id: int):
+    """Kullanıcının beslenme planı sayısını döner"""
+    return db.query(Nutrition).filter(Nutrition.user_id == user_id).count()

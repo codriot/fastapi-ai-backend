@@ -51,4 +51,21 @@ def delete_message(db: Session, message_id: int):
     except Exception as e:
         db.rollback()
         logging.error(f"Mesaj silinirken hata: {str(e)}")
-        raise 
+        raise
+
+# Sayma fonksiyonları
+def count_user_messages(db: Session, user_id: int):
+    """Kullanıcının toplam mesaj sayısını döner (gelen ve giden)"""
+    return db.query(Message).filter(
+        (Message.sender_id == user_id) | (Message.receiver_id == user_id)
+    ).count()
+
+def count_conversation(db: Session, user_id: int, other_id: int):
+    """İki kullanıcı arasındaki toplam mesaj sayısını döner"""
+    return db.query(Message).filter(
+        (
+            (Message.sender_id == user_id) & (Message.receiver_id == other_id)
+        ) | (
+            (Message.sender_id == other_id) & (Message.receiver_id == user_id)
+        )
+    ).count()

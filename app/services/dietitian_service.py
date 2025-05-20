@@ -106,4 +106,9 @@ def authenticate_dietitian(db: Session, email: str, password: str):
     # Şifreyi doğrudan karşılaştır
     if dietitian.password != password:
         return False
-    return dietitian 
+    return dietitian
+
+# Diyetisyen sayma fonksiyonu
+def count_dietitians(db: Session):
+    """Toplam diyetisyen sayısını döner"""
+    return db.query(Dietitian).count()

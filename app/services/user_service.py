@@ -109,3 +109,8 @@ def authenticate_user(db: Session, email: str, password: str):
     if user.password != password:
         return False
     return user
+
+# Kullanıcı sayma fonksiyonu
+def count_users(db: Session):
+    """Toplam kullanıcı sayısını döner"""
+    return db.query(User).count()

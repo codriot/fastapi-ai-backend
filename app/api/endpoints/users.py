@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List, Dict
 from datetime import timedelta
+from math import ceil
 from app.db.base import get_db
 from app.models.user import User, UserCreate, UserResponse
 from app.services.user_service import (
@@ -9,11 +10,13 @@ from app.services.user_service import (
     get_user,
     get_users,
     update_user,
-    delete_user
+    delete_user,
+    count_users
 )
 from app.core.security import get_current_active_user, create_access_token
 from app.schemas.token import TokenResponse
 from app.core.config import settings
+from app.schemas.pagination import PaginatedResponse
 
 router = APIRouter()
 
@@ -74,11 +77,35 @@ def read_user(user_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Kullanıcı bulunamadı")
     return db_user
 
-@router.get("/", response_model=List[UserResponse])
-def read_users(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    """Tüm kullanıcıları listeler"""
-    users = get_users(db, skip=skip, limit=limit)
-    return users
+@router.get("/", response_model=PaginatedResponse[UserResponse])
+def read_users(page: int = 1, page_size: int = 10, db: Session = Depends(get_db)):
+    """Tüm kullanıcıları sayfalı olarak listeler"""
+    # Toplam kullanıcı sayısını al
+    total = count_users(db)
+    
+    # Sayfa sayısını hesapla
+    pages = ceil(total / page_size) if total > 0 else 0
+    
+    # skip değerini hesapla
+    skip = (page - 1) * page_size
+    
+    # Kullanıcıları getir
+    users = get_users(db, skip=skip, limit=page_size)
+    
+    # Sayfalanmış yanıt oluştur
+    return {
+        "items": users,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "pages": pages
+    }
+
+@router.get("/count")
+def get_users_count(db: Session = Depends(get_db)):
+    """Toplam kullanıcı sayısını döndürür"""
+    total = count_users(db)
+    return {"total": total}
 
 @router.put("/{user_id}", response_model=UserResponse)
 def update_user_info(

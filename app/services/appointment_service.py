@@ -57,4 +57,25 @@ def delete_appointment(db: Session, appointment_id: int):
     except Exception as e:
         db.rollback()
         logging.error(f"Randevu silinirken hata: {str(e)}")
-        raise 
+        raise
+
+# Sayma fonksiyonları
+def count_appointments(db: Session):
+    """Toplam randevu sayısını döner"""
+    return db.query(Appointment).count()
+
+def count_user_appointments(db: Session, user_id: int):
+    """Belirli bir kullanıcının randevu sayısını döner"""
+    return db.query(Appointment).filter(Appointment.user_id == user_id).count()
+
+def count_dietitian_appointments(db: Session, dietitian_id: int):
+    """Belirli bir diyetisyenin randevu sayısını döner"""
+    return db.query(Appointment).filter(Appointment.dietitian_id == dietitian_id).count()
+
+def get_user_appointments(db: Session, user_id: int, skip: int = 0, limit: int = 100):
+    """Kullanıcının randevularını getirir"""
+    return db.query(Appointment).filter(Appointment.user_id == user_id).offset(skip).limit(limit).all()
+
+def get_dietitian_appointments(db: Session, dietitian_id: int, skip: int = 0, limit: int = 100):
+    """Diyetisyenin randevularını getirir"""
+    return db.query(Appointment).filter(Appointment.dietitian_id == dietitian_id).offset(skip).limit(limit).all()

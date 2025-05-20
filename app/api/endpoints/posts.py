@@ -1,15 +1,17 @@
 from fastapi import APIRouter, Depends, File, Form, UploadFile, status
 from sqlalchemy.orm import Session
 from typing import List
+from math import ceil
 
 from app.core.exceptions import PermissionDeniedException, NotFoundException
 from app.db.base import get_db
 from app.services.post_service import (
     create_post, get_post, get_posts, get_user_posts,
     update_post, delete_post, add_comment, get_comments,
-    delete_comment
+    delete_comment, count_posts, count_user_posts, count_comments
 )
-from app.schemas.post import Post, PostCreate, PostResponse
+from app.schemas.post import Post, PostCreate, PostResponse, PostComment
+from app.schemas.pagination import PaginatedResponse
 from app.utils.backblaze_upload import backblaze_uploader
 from app.core.security import get_current_user
 
@@ -51,24 +53,68 @@ async def read_post(
         raise NotFoundException("Post bulunamadı")
     return post
 
-@router.get("/", response_model=List[Post])
+@router.get("/", response_model=PaginatedResponse[Post])
 async def read_posts(
-    skip: int = 0,
-    limit: int = 100,
+    page: int = 1,
+    page_size: int = 10,
     db: Session = Depends(get_db)
 ):
-    """Tüm post'ları getirir"""
-    return get_posts(db, skip, limit)
+    """Tüm post'ları sayfalı olarak getirir"""
+    # Toplam kayıt sayısını al
+    total = count_posts(db)
+    
+    # Sayfa sayısını hesapla
+    pages = ceil(total / page_size) if total > 0 else 0
+    
+    # skip değerini hesapla
+    skip = (page - 1) * page_size
+    
+    # Kayıtları getir
+    posts = get_posts(db, skip, page_size)
+    
+    # Sayfalanmış yanıt oluştur
+    return {
+        "items": posts,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "pages": pages
+    }
 
-@router.get("/user/{user_id}", response_model=List[Post])
+@router.get("/count")
+async def get_posts_count(db: Session = Depends(get_db)):
+    """Toplam post sayısını döndürür"""
+    total = count_posts(db)
+    return {"total": total}
+
+@router.get("/user/{user_id}", response_model=PaginatedResponse[Post])
 async def read_user_posts(
     user_id: int,
-    skip: int = 0,
-    limit: int = 100,
+    page: int = 1,
+    page_size: int = 10,
     db: Session = Depends(get_db)
 ):
-    """Belirli bir kullanıcının post'larını getirir"""
-    return get_user_posts(db, user_id, skip, limit)
+    """Belirli bir kullanıcının post'larını sayfalı olarak getirir"""
+    # Toplam kayıt sayısını al
+    total = count_user_posts(db, user_id)
+    
+    # Sayfa sayısını hesapla
+    pages = ceil(total / page_size) if total > 0 else 0
+    
+    # skip değerini hesapla
+    skip = (page - 1) * page_size
+    
+    # Kayıtları getir
+    posts = get_user_posts(db, user_id, skip, page_size)
+    
+    # Sayfalanmış yanıt oluştur
+    return {
+        "items": posts,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "pages": pages
+    }
 
 @router.put("/{post_id}", response_model=Post)
 async def update_post_content(
@@ -116,15 +162,34 @@ async def create_comment(
     
     return add_comment(db, post_id, current_user.user_id, content)
 
-@router.get("/{post_id}/comments")
+@router.get("/{post_id}/comments", response_model=PaginatedResponse[PostComment])
 async def read_comments(
     post_id: int,
-    skip: int = 0,
-    limit: int = 100,
+    page: int = 1,
+    page_size: int = 10,
     db: Session = Depends(get_db)
 ):
-    """Post'un yorumlarını getirir"""
-    return get_comments(db, post_id, skip, limit)
+    """Post'un yorumlarını sayfalı olarak getirir"""
+    # Toplam kayıt sayısını al
+    total = count_comments(db, post_id)
+    
+    # Sayfa sayısını hesapla
+    pages = ceil(total / page_size) if total > 0 else 0
+    
+    # skip değerini hesapla
+    skip = (page - 1) * page_size
+    
+    # Kayıtları getir
+    comments = get_comments(db, post_id, skip, page_size)
+    
+    # Sayfalanmış yanıt oluştur
+    return {
+        "items": comments,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "pages": pages
+    }
 
 @router.delete("/comments/{comment_id}")
 async def remove_comment(

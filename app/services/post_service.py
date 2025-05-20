@@ -190,3 +190,17 @@ def delete_comment(db: Session, comment_id: int):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Yorum silinirken bir hata oluştu: {str(e)}"
         )
+
+# Sayma fonksiyonları
+
+def count_posts(db: Session):
+    """Toplam gönderi sayısını döner"""
+    return db.query(PostDB).count()
+
+def count_user_posts(db: Session, user_id: int):
+    """Belirli bir kullanıcının gönderi sayısını döner"""
+    return db.query(PostDB).filter(PostDB.user_id == user_id).count()
+
+def count_comments(db: Session, post_id: int):
+    """Belirli bir gönderinin yorum sayısını döner"""
+    return db.query(PostCommentDB).filter(PostCommentDB.post_id == post_id).count()

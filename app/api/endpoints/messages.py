@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List
+from math import ceil
 from app.db.base import get_db
 from app.models.message import Message, MessageCreate, MessageResponse
 from app.services.message_service import (
@@ -8,10 +9,13 @@ from app.services.message_service import (
     get_user_messages,
     get_conversation,
     create_message,
-    delete_message
+    delete_message,
+    count_user_messages,
+    count_conversation
 )
 from app.core.security import get_current_active_user
 from app.models.user import User
+from app.schemas.pagination import PaginatedResponse
 
 router = APIRouter()
 
@@ -31,28 +35,73 @@ def send_message(
     
     return create_message(db=db, message_data=message.dict())
 
-@router.get("/", response_model=List[MessageResponse])
+@router.get("/", response_model=PaginatedResponse[MessageResponse])
 def read_user_messages(
-    skip: int = 0, 
-    limit: int = 100, 
+    page: int = 1, 
+    page_size: int = 10, 
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user)
 ):
-    """Kullanıcının tüm mesajlarını listeler (gelen ve giden)"""
-    messages = get_user_messages(db, current_user.user_id, skip, limit)
-    return messages
+    """Kullanıcının tüm mesajlarını sayfalı olarak listeler (gelen ve giden)"""
+    # Toplam mesaj sayısını al
+    total = count_user_messages(db, current_user.user_id)
+    
+    # Sayfa sayısını hesapla
+    pages = ceil(total / page_size) if total > 0 else 0
+    
+    # skip değerini hesapla
+    skip = (page - 1) * page_size
+    
+    # Mesajları getir
+    messages = get_user_messages(db, current_user.user_id, skip, page_size)
+    
+    # Sayfalanmış yanıt oluştur
+    return {
+        "items": messages,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "pages": pages
+    }
 
-@router.get("/conversation/{other_id}", response_model=List[MessageResponse])
+@router.get("/count")
+def get_messages_count(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """Kullanıcının toplam mesaj sayısını döndürür"""
+    total = count_user_messages(db, current_user.user_id)
+    return {"total": total}
+
+@router.get("/conversation/{other_id}", response_model=PaginatedResponse[MessageResponse])
 def read_conversation(
     other_id: int,
-    skip: int = 0, 
-    limit: int = 100, 
+    page: int = 1, 
+    page_size: int = 10, 
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user)
 ):
-    """İki kullanıcı arasındaki konuşmayı getirir"""
-    messages = get_conversation(db, current_user.user_id, other_id, skip, limit)
-    return messages
+    """İki kullanıcı arasındaki konuşmayı sayfalı olarak getirir"""
+    # Toplam mesaj sayısını al
+    total = count_conversation(db, current_user.user_id, other_id)
+    
+    # Sayfa sayısını hesapla
+    pages = ceil(total / page_size) if total > 0 else 0
+    
+    # skip değerini hesapla
+    skip = (page - 1) * page_size
+    
+    # Mesajları getir
+    messages = get_conversation(db, current_user.user_id, other_id, skip, page_size)
+    
+    # Sayfalanmış yanıt oluştur
+    return {
+        "items": messages,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "pages": pages
+    }
 
 @router.get("/{message_id}", response_model=MessageResponse)
 def read_message(
