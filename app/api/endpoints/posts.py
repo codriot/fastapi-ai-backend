@@ -1,7 +1,8 @@
-from fastapi import APIRouter, Depends, File, Form, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
 from typing import List
 from math import ceil
+import os
 
 from app.core.exceptions import PermissionDeniedException, NotFoundException
 from app.db.base import get_db
@@ -13,6 +14,7 @@ from app.services.post_service import (
 from app.schemas.post import Post, PostCreate, PostResponse, PostComment
 from app.schemas.pagination import PaginatedResponse
 from app.utils.backblaze_upload import backblaze_uploader
+from app.utils.get_signed_url import get_signed_url
 from app.core.security import get_current_user
 
 router = APIRouter()
@@ -40,7 +42,12 @@ async def create_new_post(
         return post
         
     except Exception as e:
-        raise Exception(f"Post oluşturulurken bir hata oluştu: {str(e)}")
+        import logging
+        logging.error(f"Post oluşturma hatası: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Post oluşturulurken bir hata oluştu: {str(e)}"
+        )
 
 @router.get("/{post_id}", response_model=Post)
 async def read_post(
@@ -51,6 +58,24 @@ async def read_post(
     post = get_post(db, post_id)
     if not post:
         raise NotFoundException("Post bulunamadı")
+    
+    # Eğer resim URL'si B2'de ise geçici erişim URL'si oluştur
+    if post.image_url and "backblazeb2.com" in post.image_url:
+        try:
+            # URL'den dosya adını çıkart
+            file_name = os.path.basename(post.image_url)
+            signed_url = get_signed_url(file_name)
+            # Orijinal URL'yi geçici URL ile değiştir
+            post_dict = post.__dict__ if not hasattr(post, "dict") else post.dict()
+            post_dict["image_url"] = signed_url
+            # Model oluşturucusu varsa kullan
+            if hasattr(post, "model_validate"):
+                return Post.model_validate(post_dict)
+            return post_dict
+        except Exception as e:
+            # Hata durumunda orijinal postu dön
+            print(f"Geçici URL oluşturma hatası: {str(e)}")
+    
     return post
 
 @router.get("/", response_model=PaginatedResponse[Post])
@@ -72,9 +97,27 @@ async def read_posts(
     # Kayıtları getir
     posts = get_posts(db, skip, page_size)
     
+    # Resim URL'lerini işle
+    processed_posts = []
+    for post in posts:
+        post_dict = post.__dict__ if not hasattr(post, "dict") else post.dict()
+        if post_dict.get("image_url") and "backblazeb2.com" in post_dict["image_url"]:
+            try:
+                file_name = os.path.basename(post_dict["image_url"])
+                signed_url = get_signed_url(file_name)
+                post_dict["image_url"] = signed_url
+            except Exception as e:
+                print(f"Geçici URL oluşturma hatası: {str(e)}")
+        
+        # Model doğrulaması varsa kullan
+        if hasattr(post, "model_validate"):
+            processed_posts.append(Post.model_validate(post_dict))
+        else:
+            processed_posts.append(post_dict)
+    
     # Sayfalanmış yanıt oluştur
     return {
-        "items": posts,
+        "items": processed_posts,
         "total": total,
         "page": page,
         "page_size": page_size,
@@ -119,11 +162,13 @@ async def read_user_posts(
 @router.put("/{post_id}", response_model=Post)
 async def update_post_content(
     post_id: int,
-    content: str,
+    post_data: dict,
     db: Session = Depends(get_db),
     current_user = Depends(get_current_user)
 ):
     """Post içeriğini günceller"""
+    # JSON body'den content değerini al
+    content = post_data.get("content")
     post = get_post(db, post_id)
     if not post:
         raise NotFoundException("Post bulunamadı")

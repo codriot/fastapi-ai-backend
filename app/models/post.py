@@ -58,12 +58,14 @@ class PostBase(BaseModel):
     content: str
     
 class Post(PostBase):
-    post_id: str
+    post_id: int
     timestamp: datetime
     likes: int = 0
     saved_by: List[str] = []
     comments: List[str] = []
     image_url: Optional[str] = None
+    
+    model_config = {"from_attributes": True}
 
 class PostCreate(PostBase):
     image_url: Optional[str] = None
@@ -75,16 +77,15 @@ class PostResponse(PostBase):
     likes_count: int = 0
     comments_count: int = 0
     
-    class Config:
-        from_attributes = True
+    model_config = {"from_attributes": True}
 
 class PostCommentBase(BaseModel):
-    post_id: str
-    user_id: str
+    post_id: int
+    user_id: int
     content: str
     
 class PostComment(PostCommentBase):
-    comment_id: str
+    comment_id: int
     timestamp: datetime
     likes: int = 0
 
@@ -96,5 +97,4 @@ class PostCommentResponse(PostCommentBase):
     timestamp: datetime
     likes: int = 0
     
-    class Config:
-        from_attributes = True
+    model_config = {"from_attributes": True}

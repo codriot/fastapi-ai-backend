@@ -19,19 +19,17 @@ class PostComment(PostCommentBase):
     comment_id: int
     post_id: int
     user_id: int
-    created_at: datetime
+    timestamp: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = {"from_attributes": True}
 
 class Post(PostBase):
     post_id: int
     user_id: int
-    created_at: datetime
+    timestamp: datetime
     comments: List[PostComment] = []
 
-    class Config:
-        from_attributes = True
+    model_config = {"from_attributes": True}
 
 class PostResponse(Post):
-    pass 
+    pass

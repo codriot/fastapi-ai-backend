@@ -26,27 +26,23 @@ class BackblazeUploader:
             aws_access_key_id=settings.BACKBLAZE_KEY_ID,
             aws_secret_access_key=settings.BACKBLAZE_APPLICATION_KEY,
             botocore_session=session
+        )        # Backblaze B2 ile uyumlu istemciyi oluştur
+        config = Config(
+            s3={
+                'addressing_style': 'path',
+                'payload_signing_enabled': False,
+                'use_accelerate_endpoint': False
+            },
+            signature_version='s3v4'
         )
-          # Backblaze B2 ile uyumlu istemciyi oluştur
+        
         self.client = boto3_session.client(
             's3',
             endpoint_url=settings.BACKBLAZE_ENDPOINT,
-            config=Config(
-                s3={
-                    'addressing_style': 'path',
-                    'payload_signing_enabled': False,
-                    'use_accelerate_endpoint': False,
-                    # B2 problem çözümü: checksum algoritma başlığını devre dışı bırak
-                    'checksum_algorithms_enabled': False
-                },
-                signature_version='s3v4'
-            )
+            config=config
         )
-        
-        # Ekstra argümanlar
-        self.extra_args = {
-            'ACL': 'public-read'
-        }
+          # Ekstra argümanlar - Backblaze B2 ACL'i desteklemediği için boş bırakıyoruz
+        self.extra_args = {}
         
         self.bucket_name = settings.BACKBLAZE_BUCKET_NAME
     
@@ -82,14 +78,14 @@ class BackblazeUploader:
                 upload_args['ContentType'] = file.content_type
             else:
                 upload_args['ContentType'] = 'application/octet-stream'
-              # Dosyayı doğrudan upload_file ile yükle (put_object yerine)
-            # SDK Checksum'ı devre dışı bırakmak için parametreleri ayarla
-            self.client.upload_file(
-                Filename=temp_file,
-                Bucket=self.bucket_name,
-                Key=unique_filename,
-                ExtraArgs={**upload_args, 'ChecksumAlgorithm': None}
-            )
+              # Dosyayı doğrudan upload_file ile yükle (put_object yerine)            # Dosyayı yükle
+            with open(temp_file, 'rb') as data:
+                self.client.put_object(
+                    Bucket=self.bucket_name,
+                    Key=unique_filename,
+                    Body=data,
+                    **upload_args
+                )
             
             # Geçici dosyayı sil
             if os.path.exists(temp_file):

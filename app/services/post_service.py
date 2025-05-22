@@ -1,5 +1,6 @@
-from sqlalchemy.orm import Session
-from app.models.post import PostDB, PostCommentDB, Post, PostComment
+﻿from sqlalchemy.orm import Session
+from app.models.post import PostDB, PostCommentDB
+from app.schemas.post import Post, PostComment
 from fastapi import HTTPException, UploadFile, status
 import logging
 import os
@@ -55,14 +56,19 @@ def create_post(db: Session, user_id: int, content: str, image_url: str = None) 
         user_id=user_id,
         content=content,
         image_url=image_url,
-        created_at=datetime.utcnow()
+        timestamp=datetime.utcnow()
     )
-    
     db.add(db_post)
     db.commit()
     db.refresh(db_post)
     
-    return Post.from_orm(db_post)
+    # Pydantic modelini oluştur
+    try:
+        return Post.model_validate(db_post)
+    except Exception as e:
+        logging.error(f"Model dönüştürme hatası: {str(e)}")
+        # Hatayı göster ve doğrudan veritabanı nesnesini dön
+        return db_post
 
 def get_post(db: Session, post_id: int):
     """Gönderiyi ID ile getirir"""
