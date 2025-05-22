@@ -55,28 +55,52 @@ async def read_post(
     db: Session = Depends(get_db)
 ):
     """Belirli bir post'u getirir"""
-    post = get_post(db, post_id)
+    # Yorumları içeren gönderiyi getir
+    post = get_post(db, post_id, include_comments=True)
     if not post:
         raise NotFoundException("Post bulunamadı")
     
+    # SQLAlchemy nesnesini sözlüğe dönüştür
+    if isinstance(post, dict):
+        post_dict = post
+    else:
+        post_dict = post.__dict__.copy() if hasattr(post, "__dict__") else dict(post)
+    
+    # _sa_instance_state anahtarını kaldır (SQLAlchemy iç kullanım)
+    if "_sa_instance_state" in post_dict:
+        post_dict.pop("_sa_instance_state")
+    
     # Eğer resim URL'si B2'de ise geçici erişim URL'si oluştur
-    if post.image_url and "backblazeb2.com" in post.image_url:
+    if post_dict.get("image_url") and "backblazeb2.com" in post_dict["image_url"]:
         try:
             # URL'den dosya adını çıkart
-            file_name = os.path.basename(post.image_url)
+            file_name = os.path.basename(post_dict["image_url"])
             signed_url = get_signed_url(file_name)
             # Orijinal URL'yi geçici URL ile değiştir
-            post_dict = post.__dict__ if not hasattr(post, "dict") else post.dict()
             post_dict["image_url"] = signed_url
-            # Model oluşturucusu varsa kullan
-            if hasattr(post, "model_validate"):
-                return Post.model_validate(post_dict)
-            return post_dict
         except Exception as e:
-            # Hata durumunda orijinal postu dön
+            # Hata durumunda orijinal URL'yi koru
             print(f"Geçici URL oluşturma hatası: {str(e)}")
     
-    return post
+    # Yorumları işle
+    if "comments" in post_dict:
+        processed_comments = []
+        for comment in post_dict["comments"]:
+            # Yorum SQLAlchemy nesnesini sözlüğe dönüştür
+            comment_dict = comment.__dict__.copy() if hasattr(comment, "__dict__") else dict(comment)
+            if "_sa_instance_state" in comment_dict:
+                comment_dict.pop("_sa_instance_state")
+            processed_comments.append(comment_dict)
+        post_dict["comments"] = processed_comments
+    else:
+        post_dict["comments"] = []
+    
+    # Model oluşturucusu varsa kullan
+    try:
+        return Post.model_validate(post_dict)
+    except Exception as e:
+        print(f"Model doğrulama hatası: {str(e)}")
+        return post_dict
 
 @router.get("/", response_model=PaginatedResponse[Post])
 async def read_posts(
@@ -94,13 +118,20 @@ async def read_posts(
     # skip değerini hesapla
     skip = (page - 1) * page_size
     
-    # Kayıtları getir
-    posts = get_posts(db, skip, page_size)
+    # Yorumları içeren gönderileri getir
+    posts = get_posts(db, skip, page_size, include_comments=True)
     
-    # Resim URL'lerini işle
+    # Resim URL'lerini işle ve yorumları içeren tam postları hazırla
     processed_posts = []
     for post in posts:
-        post_dict = post.__dict__ if not hasattr(post, "dict") else post.dict()
+        # SQLAlchemy nesnesini sözlüğe dönüştür
+        post_dict = post.__dict__.copy() if hasattr(post, "__dict__") else dict(post)
+        
+        # _sa_instance_state anahtarını kaldır (SQLAlchemy iç kullanım)
+        if "_sa_instance_state" in post_dict:
+            post_dict.pop("_sa_instance_state")
+        
+        # Resim URL'sini geçici URL ile değiştir
         if post_dict.get("image_url") and "backblazeb2.com" in post_dict["image_url"]:
             try:
                 file_name = os.path.basename(post_dict["image_url"])
@@ -109,10 +140,24 @@ async def read_posts(
             except Exception as e:
                 print(f"Geçici URL oluşturma hatası: {str(e)}")
         
-        # Model doğrulaması varsa kullan
-        if hasattr(post, "model_validate"):
-            processed_posts.append(Post.model_validate(post_dict))
+        # Yorumları işle ve ekle
+        if "comments" in post_dict:
+            processed_comments = []
+            for comment in post_dict["comments"]:
+                # Yorum SQLAlchemy nesnesini sözlüğe dönüştür
+                comment_dict = comment.__dict__.copy() if hasattr(comment, "__dict__") else dict(comment)
+                if "_sa_instance_state" in comment_dict:
+                    comment_dict.pop("_sa_instance_state")
+                processed_comments.append(comment_dict)
+            post_dict["comments"] = processed_comments
         else:
+            post_dict["comments"] = []
+        
+        # Model doğrulaması varsa kullan
+        try:
+            processed_posts.append(Post.model_validate(post_dict))
+        except Exception as e:
+            print(f"Model doğrulama hatası: {str(e)}")
             processed_posts.append(post_dict)
     
     # Sayfalanmış yanıt oluştur
@@ -147,12 +192,51 @@ async def read_user_posts(
     # skip değerini hesapla
     skip = (page - 1) * page_size
     
-    # Kayıtları getir
-    posts = get_user_posts(db, user_id, skip, page_size)
+    # Yorumları içeren gönderileri getir
+    posts = get_user_posts(db, user_id, skip, page_size, include_comments=True)
+    
+    # Resim URL'lerini işle ve yorumları içeren tam postları hazırla
+    processed_posts = []
+    for post in posts:
+        # SQLAlchemy nesnesini sözlüğe dönüştür
+        post_dict = post.__dict__.copy() if hasattr(post, "__dict__") else dict(post)
+        
+        # _sa_instance_state anahtarını kaldır (SQLAlchemy iç kullanım)
+        if "_sa_instance_state" in post_dict:
+            post_dict.pop("_sa_instance_state")
+        
+        # Resim URL'sini geçici URL ile değiştir
+        if post_dict.get("image_url") and "backblazeb2.com" in post_dict["image_url"]:
+            try:
+                file_name = os.path.basename(post_dict["image_url"])
+                signed_url = get_signed_url(file_name)
+                post_dict["image_url"] = signed_url
+            except Exception as e:
+                print(f"Geçici URL oluşturma hatası: {str(e)}")
+        
+        # Yorumları işle ve ekle
+        if "comments" in post_dict:
+            processed_comments = []
+            for comment in post_dict["comments"]:
+                # Yorum SQLAlchemy nesnesini sözlüğe dönüştür
+                comment_dict = comment.__dict__.copy() if hasattr(comment, "__dict__") else dict(comment)
+                if "_sa_instance_state" in comment_dict:
+                    comment_dict.pop("_sa_instance_state")
+                processed_comments.append(comment_dict)
+            post_dict["comments"] = processed_comments
+        else:
+            post_dict["comments"] = []
+        
+        # Model doğrulaması varsa kullan
+        try:
+            processed_posts.append(Post.model_validate(post_dict))
+        except Exception as e:
+            print(f"Model doğrulama hatası: {str(e)}")
+            processed_posts.append(post_dict)
     
     # Sayfalanmış yanıt oluştur
     return {
-        "items": posts,
+        "items": processed_posts,
         "total": total,
         "page": page,
         "page_size": page_size,
@@ -197,7 +281,7 @@ async def remove_post(
 @router.post("/{post_id}/comments")
 async def create_comment(
     post_id: int,
-    content: str,
+    comment_data: dict,
     db: Session = Depends(get_db),
     current_user = Depends(get_current_user)
 ):
@@ -205,6 +289,8 @@ async def create_comment(
     if not hasattr(current_user, 'user_id'):
         raise PermissionDeniedException()
     
+    # JSON body'den content değerini al
+    content = comment_data.get("content")
     return add_comment(db, post_id, current_user.user_id, content)
 
 @router.get("/{post_id}/comments", response_model=PaginatedResponse[PostComment])

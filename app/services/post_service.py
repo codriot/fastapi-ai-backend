@@ -70,25 +70,104 @@ def create_post(db: Session, user_id: int, content: str, image_url: str = None) 
         # Hatayı göster ve doğrudan veritabanı nesnesini dön
         return db_post
 
-def get_post(db: Session, post_id: int):
-    """Gönderiyi ID ile getirir"""
-    post = db.query(PostDB).filter(PostDB.post_id == post_id).first()
+def get_post(db: Session, post_id: int, include_comments: bool = True):
+    """
+    Gönderiyi ID ile getirir
+    
+    Args:
+        db (Session): Veritabanı oturumu
+        post_id (int): Gönderi ID'si
+        include_comments (bool): Yorumları da getirip getirmeyeceği
+        
+    Returns:
+        PostDB: Gönderi nesnesi
+    """
+    # Yorumları da getirmek için SQLAlchemy options kullanıyoruz
+    query = db.query(PostDB).filter(PostDB.post_id == post_id)
+    
+    # Sonucu al
+    post = query.first()
     if not post:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Gönderi bulunamadı"
         )
+      # Yorumları ekle
+    if include_comments:
+        comments = get_comments(db, post_id)
+        
+        # ORM nesnesini sözlüğe çevir ve yorumları ekle
+        if isinstance(post, dict):
+            post['comments'] = comments
+            return post
+        else:
+            # SQLAlchemy nesnesini sözlük olarak kopyala
+            post_dict = {column.name: getattr(post, column.name)
+                       for column in post.__table__.columns}
+            post_dict['comments'] = comments
+            return post_dict
+        
     return post
 
-def get_posts(db: Session, skip: int = 0, limit: int = 100):
-    """Tüm gönderileri getirir"""
-    return db.query(PostDB).order_by(PostDB.timestamp.desc()).offset(skip).limit(limit).all()
+def get_posts(db: Session, skip: int = 0, limit: int = 100, include_comments: bool = True):
+    """
+    Tüm gönderileri getirir
+    
+    Args:
+        db (Session): Veritabanı oturumu
+        skip (int): Atlanacak kayıt sayısı
+        limit (int): Getirilecek kayıt sayısı
+        include_comments (bool): Yorumları da getirip getirmeyeceği
+        
+    Returns:
+        List[Dict]: Gönderi listesi (sözlük olarak)
+    """
+    posts = db.query(PostDB).order_by(PostDB.timestamp.desc()).offset(skip).limit(limit).all()
+    
+    # Yorumları ekle
+    if include_comments:
+        result_posts = []
+        for post in posts:
+            comments = get_comments(db, post.post_id)
+            # SQLAlchemy nesnesini sözlük olarak kopyala
+            post_dict = {column.name: getattr(post, column.name) 
+                        for column in post.__table__.columns}
+            post_dict['comments'] = comments
+            result_posts.append(post_dict)
+        return result_posts
+    
+    return posts
 
-def get_user_posts(db: Session, user_id: int, skip: int = 0, limit: int = 100):
-    """Belirli bir kullanıcının gönderilerini getirir"""
+def get_user_posts(db: Session, user_id: int, skip: int = 0, limit: int = 100, include_comments: bool = True):
+    """
+    Belirli bir kullanıcının gönderilerini getirir
+    
+    Args:
+        db (Session): Veritabanı oturumu
+        user_id (int): Kullanıcı ID'si
+        skip (int): Atlanacak kayıt sayısı
+        limit (int): Getirilecek kayıt sayısı
+        include_comments (bool): Yorumları da getirip getirmeyeceği
+        
+    Returns:
+        List[Dict]: Gönderi listesi (sözlük olarak)
+    """
     posts = db.query(PostDB).filter(PostDB.user_id == user_id).order_by(PostDB.timestamp.desc()).offset(skip).limit(limit).all()
     if not posts:
         return []  # Boş liste dönüyoruz, hata fırlatmak yerine
+    
+    # Yorumları ekle
+    if include_comments:
+        result_posts = []
+        for post in posts:
+            comments = get_comments(db, post.post_id)
+            # SQLAlchemy nesnesini sözlük olarak kopyala
+            post_dict = {column.name: getattr(post, column.name) 
+                        for column in post.__table__.columns}
+            post_dict['comments'] = comments
+            result_posts.append(post_dict)
+        return result_posts
+    
     return posts
 
 def update_post(db: Session, post_id: int, content: str):
@@ -170,8 +249,13 @@ def add_comment(db: Session, post_id: int, user_id: int, content: str):
 
 def get_comments(db: Session, post_id: int, skip: int = 0, limit: int = 100):
     """Gönderinin yorumlarını getirir"""
-    # Önce gönderi var mı kontrol et
-    get_post(db, post_id)  # Burada get_post içinde 404 kontrolü yapılıyor
+    # Önce gönderi var mı doğrudan kontrol et (get_post çağırmadan)
+    post = db.query(PostDB).filter(PostDB.post_id == post_id).first()
+    if not post:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Gönderi bulunamadı"
+        )
     
     comments = db.query(PostCommentDB).filter(PostCommentDB.post_id == post_id).order_by(PostCommentDB.timestamp.desc()).offset(skip).limit(limit).all()
     return comments

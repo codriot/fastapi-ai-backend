@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from .endpoints import auth, posts, users, dietitians, nutrition, appointments, nutrition_ai, messages, file_access
+from .endpoints import auth, posts, users, dietitians, nutrition, appointments, nutrition_ai, messages, file_access, recipes
 
 # Ana router
 api_router = APIRouter()
@@ -14,3 +14,4 @@ api_router.include_router(appointments.router, prefix="/appointments", tags=["Ra
 api_router.include_router(nutrition_ai.router, prefix="/nutrition/ai", tags=["Beslenme AI"])
 api_router.include_router(messages.router, prefix="/messages", tags=["Mesajlaşma"])
 api_router.include_router(file_access.router, prefix="/files", tags=["Dosya Erişimi"])
+api_router.include_router(recipes.router, prefix="/recipes", tags=["Tarifler"])
